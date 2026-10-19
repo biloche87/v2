@@ -1216,7 +1216,7 @@
           </section>`
         : '';
 
-    document.title = 'BamaHub — L’annuaire de Bamako';
+    document.title = t('home.docTitle');
 
     $('#main').innerHTML = `
       <section class="hero">
@@ -2727,8 +2727,8 @@
     const requiredMark = field.required ? '<span class="req" aria-hidden="true">*</span>' : '';
     const hintParts = [];
     if (field.hint) hintParts.push(field.hint);
-    if (field.money) hintParts.push('Montant en FCFA');
-    if (field.suffix) hintParts.push(`Unité : ${field.suffix.replace('/', '')}`);
+    if (field.money) hintParts.push(t('add.moneyHint'));
+    if (field.suffix) hintParts.push(t('add.unitHint', { unit: field.suffix.replace('/', '') }));
     const hint = hintParts.length ? `<span class="hint">${escapeHtml(hintParts.join(' · '))}</span>` : '';
 
     if (field.type === 'textarea') {
@@ -2750,7 +2750,7 @@
       return `<div class="field">
         <label for="${id}">${escapeHtml(fieldLabel(field))}${requiredMark}</label>
         <select class="select" id="${id}" name="${escapeHtml(field.key)}"${required}>
-          <option value="">Choisir…</option>
+          <option value="">${escapeHtml(t('common.choose'))}</option>
           ${field.options
             .map(
               (option) =>
@@ -2819,7 +2819,7 @@
     const draft = state.addDraft;
     const cat = getCategory(draft.category);
 
-    document.title = 'Ajouter une adresse — BamaHub';
+    document.title = `${t('add.title')} — BamaHub`;
 
     $('#main').innerHTML = `
       <div class="container form-page page">
@@ -2967,10 +2967,10 @@
             <div class="preview-wrap">
               <div class="preview-head">
                 <h2>${ICONS.sparkles} ${escapeHtml(t('add.previewTitle'))}</h2>
-                <span class="pill pill-brand">Nouveau</span>
+                <span class="pill pill-brand">${escapeHtml(t('common.new'))}</span>
               </div>
               <div id="form-preview-card"></div>
-              <p class="preview-hint">Voici comment votre adresse apparaîtra dans l’annuaire. L’aperçu se met à jour au fil de la saisie.</p>
+              <p class="preview-hint">${escapeHtml(t('add.previewHint'))}</p>
             </div>
           </aside>
         </div>
@@ -3087,7 +3087,7 @@
     persistCustomListings();
 
     state.addDraft = null;
-    showToast(`« ${listing.name} » a été ajoutée à BamaHub.`, { duration: 4500 });
+    showToast(t('toast.listingAdded', { name: listing.name }), { duration: 4500 });
     location.hash = `#/adresse/${listing.id}`;
   }
 
@@ -3126,8 +3126,8 @@
       </div>`;
   }
 
-  function renderNotFound(message, title = 'Page introuvable') {
-    document.title = 'Page introuvable — BamaHub';
+  function renderNotFound(message = t('notFound.text'), title = t('notFound.title')) {
+    document.title = `${t('notFound.title')} — BamaHub`;
     $('#main').innerHTML = `
       <div class="container page" style="padding:3rem 1.15rem">
         <h1 class="sr-only">${escapeHtml(title)}</h1>
@@ -3135,7 +3135,7 @@
           title,
           text: message,
           iconMarkup: ICONS.marker,
-          action: `<a class="btn btn-primary" href="#/">${ICONS.arrowLeft} Retour à l’accueil</a>`,
+          action: `<a class="btn btn-primary" href="#/">${ICONS.arrowLeft} ${escapeHtml(t('notFound.back'))}</a>`,
         })}
       </div>`;
   }
@@ -3226,7 +3226,7 @@
           renderDetail(route);
         } else {
           setActiveNav('');
-          renderNotFound('La page demandée n’existe pas. Revenez à l’accueil pour continuer votre recherche.');
+          renderNotFound();
         }
     }
 
@@ -3249,7 +3249,7 @@
 
     const button = $('#theme-toggle');
     if (button) {
-      const label = nextTheme === 'dark' ? 'Activer le mode clair' : 'Activer le mode sombre';
+      const label = nextTheme === 'dark' ? t('theme.toLight') : t('theme.toDark');
       button.setAttribute('aria-label', label);
       button.setAttribute('title', label);
     }
@@ -3387,9 +3387,9 @@
       `📍 ${listing.name}`,
       [listing.address, listing.neighborhood].filter(Boolean).join(' · '),
     ];
-    if (listing.landmark) lines.push(`Repère : ${listing.landmark}`);
+    if (listing.landmark) lines.push(`${t('detail.landmark')} : ${listing.landmark}`);
     if (hasCoords(listing)) lines.push(googlePlaceUrl(listing));
-    lines.push('Partagé via BamaHub');
+    lines.push(t('share.via'));
     return `https://wa.me/?text=${encodeURIComponent(lines.filter(Boolean).join('\n'))}`;
   }
 
@@ -3397,13 +3397,13 @@
   function geolocationErrorMessage(error) {
     switch (error?.code) {
       case 1:
-        return 'Localisation refusée. Autorisez l’accès dans votre navigateur pour voir les adresses autour de vous.';
+        return t('geo.denied');
       case 2:
-        return 'Position indisponible. Vérifiez votre connexion ou réessayez dans un instant.';
+        return t('geo.unavailable');
       case 3:
-        return 'La localisation a pris trop de temps. Réessayez.';
+        return t('geo.timeout');
       default:
-        return 'Impossible d’obtenir votre position.';
+        return t('geo.unknown');
     }
   }
 
@@ -3615,7 +3615,7 @@
   /** Contrôles de zoom avec libellés français (Leaflet est en anglais). */
   function addZoomControl(map) {
     L.control
-      .zoom({ zoomInTitle: 'Zoom avant', zoomOutTitle: 'Zoom arrière', position: 'topleft' })
+      .zoom({ zoomInTitle: t('map.zoomIn'), zoomOutTitle: t('map.zoomOut'), position: 'topleft' })
       .addTo(map);
   }
 
@@ -3733,8 +3733,8 @@
       L.marker(userLatLng, { icon: userIcon(), zIndexOffset: 1200, keyboard: false })
         .addTo(userLayer)
         .bindPopup(
-          `<div class="map-popup"><strong>Votre position</strong><br><span class="hint">Rayon de recherche : ${escapeHtml(
-            radiusLabel(state.radius)
+          `<div class="map-popup"><strong>${escapeHtml(t('map.myPosition'))}</strong><br><span class="hint">${escapeHtml(
+            t('map.radiusLabel', { radius: radiusLabel(state.radius) })
           )}</span></div>`
         );
       L.circle(userLatLng, {
@@ -3830,10 +3830,10 @@
     if (!hint) return;
     const coords = state.addDraft?.coords;
     hint.innerHTML = coords
-      ? `${ICONS.checkCircle} Position enregistrée : <strong>${Number(coords[0]).toFixed(5)}, ${Number(
+      ? `${ICONS.checkCircle} ${escapeHtml(t('add.positionSaved'))} <strong>${Number(coords[0]).toFixed(5)}, ${Number(
           coords[1]
         ).toFixed(5)}</strong>`
-      : 'Cliquez sur la carte (ou utilisez « Ma position ») pour placer le pin.';
+      : t('add.mapHintShort');
     hint.classList.toggle('is-set', Boolean(coords));
   }
 
@@ -3849,7 +3849,7 @@
         icon: formPinIcon(),
         draggable: true,
         keyboard: true,
-        title: 'Position de l’adresse',
+        title: t('add.pinTitle'),
       }).addTo(state.formMap);
       state.formMarker.on('dragend', () => {
         const point = state.formMarker.getLatLng();
@@ -4195,7 +4195,7 @@
     }
 
     setAuthError('');
-    showToast(`Compte de démonstration prêt : ${DEMO_ACCOUNT.email}`, { duration: 4200 });
+    showToast(t('toast.demoReady', { email: DEMO_ACCOUNT.email }), { duration: 4200 });
   }
 
   async function handleAuthSubmit(form) {
@@ -4206,15 +4206,15 @@
     const name = String(data.get('name') || '').trim();
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
-      setAuthError('Merci de saisir une adresse e-mail valide.');
+      setAuthError(t('auth.error.email'));
       return;
     }
     if (password.length < 6) {
-      setAuthError('Le mot de passe doit contenir au moins 6 caractères.');
+      setAuthError(t('auth.error.password'));
       return;
     }
     if (mode === 'register' && name.length < 2) {
-      setAuthError('Merci d’indiquer votre nom.');
+      setAuthError(t('auth.error.name'));
       return;
     }
 
@@ -4222,7 +4222,7 @@
 
     if (mode === 'register') {
       if (state.accounts.some((account) => account.email === email)) {
-        setAuthError('Un compte existe déjà avec cette adresse. Essayez de vous connecter.');
+        setAuthError(t('auth.error.exists'));
         return;
       }
       const account = {
@@ -4237,13 +4237,13 @@
       persistSession();
       updateAccountUI();
       renderAuthView('account');
-      showToast(`Bienvenue sur BamaHub, ${name.split(' ')[0]} !`);
+      showToast(t('auth.signupWelcome', { name: name.split(' ')[0] }));
       return;
     }
 
     const account = state.accounts.find((item) => item.email === email);
     if (!account || account.password !== hashed) {
-      setAuthError('E-mail ou mot de passe incorrect. Vérifiez votre saisie.');
+      setAuthError(t('auth.error.invalid'));
       return;
     }
 
@@ -4436,7 +4436,7 @@
   }
 
   function deleteCustomListing(listingId, name) {
-    if (!window.confirm(`Supprimer définitivement « ${name} » de BamaHub ?`)) return;
+    if (!window.confirm(t('confirm.deleteListing', { name }))) return;
     const index = state.listings.findIndex((listing) => listing.id === listingId);
     if (index === -1) return;
     state.listings.splice(index, 1);
@@ -4444,7 +4444,7 @@
     persistCustomListings();
     persistFavorites();
     updateFavoritesCount();
-    showToast(`« ${name} » a été supprimée.`);
+    showToast(t('toast.listingDeleted', { name }));
     location.hash = '#/explorer';
   }
 
@@ -5149,7 +5149,7 @@
       const clearFavorites = event.target.closest('[data-clear-favorites]');
       if (clearFavorites) {
         if (!state.favorites.size) return;
-        if (!window.confirm(`Retirer les ${state.favorites.size} adresses de vos favoris ?`)) return;
+        if (!window.confirm(t('confirm.clearFavorites', { n: state.favorites.size }))) return;
         state.favorites.clear();
         persistFavorites();
         updateFavoritesCount();
