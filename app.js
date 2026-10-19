@@ -49,11 +49,29 @@
 
   const SORT_OPTIONS = [
     { id: 'pertinence', label: 'Pertinence' },
+    { id: 'distance', label: 'Distance' },
     { id: 'note', label: 'Mieux notés' },
     { id: 'recent', label: 'Plus récents' },
     { id: 'prix-asc', label: 'Prix croissant' },
     { id: 'prix-desc', label: 'Prix décroissant' },
   ];
+
+  /** Centre de Bamako utilisé par la carte et le formulaire. */
+  const BAMAKO_CENTER = [12.6392, -8.0029];
+  const MAP_DEFAULT_ZOOM = 13;
+
+  /** Rayons proposés par le mode « Autour de moi ». */
+  const RADIUS_OPTIONS = [
+    { value: 500, label: '500 m' },
+    { value: 1000, label: '1 km' },
+    { value: 5000, label: '5 km' },
+  ];
+  const DEFAULT_RADIUS = 5000;
+
+  /** Fonds de carte OpenStreetMap (aucune clé API, attribution obligatoire). */
+  const OSM_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+  const OSM_ATTRIBUTION =
+    '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
 
   /** Filtres rapides génériques, branchés sur les champs booléens du config. */
   const QUICK_FILTERS = [
@@ -168,6 +186,20 @@
     accounts: [],
     session: null,
     authMode: 'login',
+    // Carte & géolocalisation
+    userLocation: null,
+    nearMe: false,
+    radius: DEFAULT_RADIUS,
+    geoStatus: 'idle', // idle | locating | ready | denied | unavailable
+    explorerMap: null,
+    clusterLayer: null,
+    userLayer: null,
+    detailMap: null,
+    formMap: null,
+    formMarker: null,
+    mapSignature: '',
+    mapFitTimer: null,
+    mapOfflineNoticeShown: false,
     authReturnRoute: '#/',
     lastFocusedElement: null,
   };
@@ -283,6 +315,13 @@
     refresh: icon('<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>'),
     trash: icon('<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v5M14 11v5"/>'),
     marker: icon('<path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/>'),
+    list: icon('<path d="M8 6h13M8 12h13M8 18h13"/><path d="M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>'),
+    map: icon('<path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3Z"/><path d="M9 3v15M15 6v15"/>'),
+    target: icon('<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>'),
+    radius: icon('<circle cx="12" cy="12" r="8.5" stroke-dasharray="3 3"/><circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none"/>'),
+    crosshair: icon('<circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>'),
+    route: icon('<circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="5" r="2.2"/><path d="M8.2 19h4.3a4 4 0 0 0 4-4V8.2"/>'),
+    eye: icon('<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/>'),
   };
 
   const categoryIcon = (cat) =>
@@ -365,6 +404,7 @@
         <p class="card-kicker">${escapeHtml(subcategory)} <span class="sep">·</span> ${escapeHtml(listing.neighborhood || 'Bamako')}</p>
         <h3 class="card-title">${title}</h3>
         ${ratingMarkup(listing)}
+        ${distanceLabel(listing) ? `<p class="card-distance">${ICONS.crosshair} Vous êtes ${escapeHtml(distanceLabel(listing))}</p>` : ''}
         <div class="card-meta">
           <span>${ICONS.mapPin} ${escapeHtml(listing.neighborhood || 'Bamako')}</span>
           <span>${ICONS.clock} ${escapeHtml(listing.hours || 'Horaires sur demande')}</span>
@@ -448,7 +488,7 @@
           <form class="search-form" data-search-form role="search">
             <label class="sr-only" for="home-search">Rechercher une adresse à Bamako</label>
             ${ICONS.search}
-            <input id="home-search" type="search" name="q" placeholder="Restaurant, pharmacie, quartier…" autocomplete="off" />
+            <input id="home-search" type="search" name="q" placeholder="Restaurant, pharmacie, quartier, repère…" autocomplete="off" />
             <button class="btn btn-primary" type="submit">Rechercher</button>
           </form>
 
@@ -532,7 +572,7 @@
 
   /* --------------------------- Explorateur -------------------------------- */
   function defaultFilters() {
-    return { q: '', cat: '', sub: '', hood: '', quick: '', sort: 'pertinence' };
+    return { q: '', cat: '', sub: '', hood: '', quick: '', sort: 'pertinence', view: 'list' };
   }
 
   function filtersFromParams(params) {
@@ -543,6 +583,7 @@
     const hood = params.get('hood');
     const quick = params.get('quick');
     const sort = params.get('sort');
+    const view = params.get('vue');
 
     if (q) filters.q = q;
     if (cat && CATEGORIES.some((item) => item.id === cat)) filters.cat = cat;
@@ -553,6 +594,7 @@
     if (hood && NEIGHBORHOODS.includes(hood)) filters.hood = hood;
     if (quick && QUICK_FILTERS.some((item) => item.id === quick)) filters.quick = quick;
     if (sort && SORT_OPTIONS.some((item) => item.id === sort)) filters.sort = sort;
+    if (view === 'carte') filters.view = 'map';
     return filters;
   }
 
@@ -564,6 +606,7 @@
     if (filters.hood) params.set('hood', filters.hood);
     if (filters.quick) params.set('quick', filters.quick);
     if (filters.sort && filters.sort !== 'pertinence') params.set('sort', filters.sort);
+    if (filters.view === 'map') params.set('vue', 'carte');
     const query = params.toString();
     return `#/explorer${query ? `?${query}` : ''}`;
   }
@@ -667,7 +710,7 @@
           <div class="search-inline">
             ${ICONS.search}
             <label class="sr-only" for="filter-q">Rechercher une adresse</label>
-            <input id="filter-q" class="input" type="search" placeholder="Nom, plat, service, quartier…" value="${escapeHtml(filters.q)}" autocomplete="off" />
+            <input id="filter-q" class="input" type="search" placeholder="Nom, plat, service, quartier, repère…" value="${escapeHtml(filters.q)}" autocomplete="off" />
             <button type="button" class="search-clear" data-clear-search aria-label="Effacer la recherche" ${filters.q ? '' : 'hidden'}>${ICONS.x}</button>
           </div>
 
@@ -706,11 +749,43 @@
           </div>
         </section>
 
+        <div class="explorer-actions">
+          <div class="view-toggle" role="group" aria-label="Mode d’affichage">
+            <button type="button" data-view="list" class="${filters.view === 'list' ? 'is-active' : ''}" aria-pressed="${filters.view === 'list'}">
+              ${ICONS.list} Liste
+            </button>
+            <button type="button" data-view="map" class="${filters.view === 'map' ? 'is-active' : ''}" aria-pressed="${filters.view === 'map'}">
+              ${ICONS.map} Carte
+            </button>
+          </div>
+          <button type="button" class="near-me-toggle${state.nearMe ? ' is-active' : ''}" data-near-me aria-pressed="${state.nearMe}" aria-controls="near-me-bar">
+            ${ICONS.target} <span data-near-me-label>${state.nearMe ? 'Autour de moi · actif' : 'Autour de moi'}</span>
+          </button>
+        </div>
+
+        <div class="near-me-bar" id="near-me-bar" data-near-me-bar ${state.nearMe ? '' : 'hidden'}>
+          <span class="near-me-label">${ICONS.radius} Rayon</span>
+          <div class="radius-chips" role="group" aria-label="Rayon de recherche">
+            ${RADIUS_OPTIONS.map(
+              (option) => `<button type="button" class="radius-chip${option.value === state.radius ? ' is-active' : ''}" data-radius="${option.value}" aria-pressed="${option.value === state.radius}">${option.label}</button>`
+            ).join('')}
+          </div>
+          <span class="near-me-info" data-near-me-info></span>
+        </div>
+
         <div class="results-bar">
           <p class="results-count" data-results-count aria-live="polite"></p>
         </div>
         <div class="active-filters" data-active-filters></div>
-        <div data-results-grid></div>
+
+        <div class="results-grid-wrap" data-list-view ${filters.view === 'map' ? 'hidden' : ''}>
+          <div data-results-grid></div>
+        </div>
+
+        <div class="map-shell" data-map-shell data-map-view ${filters.view === 'map' ? '' : 'hidden'}>
+          <div id="explorer-map" class="explorer-map" role="application" aria-label="Carte des adresses de Bamako"></div>
+          <p class="map-hint">${ICONS.info} Touchez une épingle pour voir l’adresse, l’itinéraire et le partage WhatsApp.</p>
+        </div>
       </div>`;
 
     attachExplorerListeners();
@@ -722,6 +797,14 @@
     const { q, cat, sub, hood, quick, sort } = state.filters;
     let items = [...state.listings];
 
+    // Mode « Autour de moi » : on ne garde que le rayon choisi.
+    if (state.nearMe && state.userLocation) {
+      items = items.filter((listing) => {
+        const distance = distanceToListing(listing);
+        return distance !== null && distance <= state.radius;
+      });
+    }
+
     if (cat) items = items.filter((listing) => listing.category === cat);
     if (hood) items = items.filter((listing) => listing.neighborhood === hood);
     if (sub) items = items.filter((listing) => (listing.subcategories || []).includes(sub));
@@ -732,9 +815,9 @@
 
     if (q) {
       const needle = normalize(q);
-      items = items.filter((listing) => {
+      const haystack = (listing) => {
         const category = getCategory(listing.category);
-        const haystack = normalize(
+        return normalize(
           [
             listing.name,
             listing.description,
@@ -749,11 +832,24 @@
             ),
           ].join(' ')
         );
-        return haystack.includes(needle);
-      });
+      };
+
+      // Le repère sert de secours : « pharmacie » renvoie d'abord les pharmacies,
+      // mais une recherche par repère (« en face du marché ») reste possible.
+      const coreMatches = items.filter((listing) => haystack(listing).includes(needle));
+      items = coreMatches.length
+        ? coreMatches
+        : items.filter(
+            (listing) =>
+              haystack(listing).includes(needle) || normalize(listing.landmark || '').includes(needle)
+          );
     }
 
     switch (sort) {
+      case 'distance':
+        // Les adresses sans coordonnées passent en fin de liste.
+        items.sort((a, b) => (distanceToListing(a) ?? Infinity) - (distanceToListing(b) ?? Infinity));
+        break;
       case 'note':
         items.sort((a, b) => (b.rating || 0) - (a.rating || 0) || (b.reviews || 0) - (a.reviews || 0));
         break;
@@ -842,6 +938,22 @@
     const clearSearch = $('[data-clear-search]');
     if (clearSearch) clearSearch.hidden = !state.filters.q;
 
+    // Bascule Liste / Carte : on garde les deux vues montées, on masque l'autre.
+    const isMap = state.filters.view === 'map';
+    const listWrap = $('[data-list-view]');
+    const mapShell = $('[data-map-shell]');
+    if (listWrap) listWrap.hidden = isMap;
+    if (mapShell) mapShell.hidden = !isMap;
+
+    if (isMap) {
+      renderMapMarkers(items);
+    } else if (state.explorerMap) {
+      // Évite un décalage de tuiles lorsque la carte réapparaît.
+      requestAnimationFrame(() => state.explorerMap?.invalidateSize());
+    }
+
+    updateNearMeUI(count);
+
     syncExplorerUrl();
   }
 
@@ -871,6 +983,8 @@
 
   function resetExplorerFilters() {
     state.filters = defaultFilters();
+    state.nearMe = false;
+    state.radius = DEFAULT_RADIUS;
     refreshFilterControls();
     updateExplorerResults();
   }
@@ -914,6 +1028,33 @@
     $('#filter-sort')?.addEventListener('change', (event) => {
       state.filters.sort = event.target.value;
       updateExplorerResults();
+    });
+
+    // Bascule Liste / Carte.
+    $$('[data-view]').forEach((button) => {
+      button.addEventListener('click', () => {
+        const view = button.dataset.view;
+        if (state.filters.view === view) return;
+        state.filters.view = view;
+        $$('[data-view]').forEach((item) => {
+          const active = item.dataset.view === view;
+          item.classList.toggle('is-active', active);
+          item.setAttribute('aria-pressed', String(active));
+        });
+        updateExplorerResults();
+      });
+    });
+
+    $('[data-near-me]')?.addEventListener('click', toggleNearMe);
+
+    $$('[data-radius]').forEach((chip) => {
+      chip.addEventListener('click', () => {
+        const radius = Number(chip.dataset.radius);
+        if (radius === state.radius) return;
+        state.radius = radius;
+        updateNearMeUI();
+        updateExplorerResults();
+      });
     });
 
     $('[data-filters-toggle]')?.addEventListener('click', (event) => {
@@ -1005,11 +1146,6 @@
     const priceInfo = getPriceInfo(listing);
     const rawPhone = (listing.phone || '').replace(/[^\d+]/g, '');
     const waNumber = (listing.whatsapp || '').replace(/\D/g, '');
-    const mapQuery = listing.coords?.length === 2
-      ? `${listing.coords[0]},${listing.coords[1]}`
-      : `${listing.name}, ${listing.address}, Bamako, Mali`;
-    const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`;
-
     document.title = `${listing.name} — BamaHub`;
 
     // Champs spécifiques : textes longs dans des panneaux, le reste en fiches.
@@ -1078,6 +1214,12 @@
               <p class="detail-loc">${ICONS.mapPin}
                 <span>${escapeHtml(listing.address)}${listing.neighborhood ? ` · ${escapeHtml(listing.neighborhood)}` : ''}</span>
               </p>
+              ${
+                listing.landmark
+                  ? `<p class="detail-landmark">${ICONS.crosshair}<span><strong>Repère :</strong> ${escapeHtml(listing.landmark)}</span></p>`
+                  : ''
+              }
+              ${distanceLabel(listing) ? `<p class="detail-distance">${ICONS.target} Vous êtes ${escapeHtml(distanceLabel(listing))} de cette adresse.</p>` : ''}
             </div>
           </div>
 
@@ -1088,8 +1230,14 @@
             <button type="button" class="btn btn-ghost" data-share="${escapeHtml(listing.id)}">
               ${ICONS.share}<span>Partager</span>
             </button>
-            <a class="btn btn-ghost" href="${mapsUrl}" target="_blank" rel="noopener">
-              ${ICONS.navigation}<span>Itinéraire</span>
+            <a class="btn btn-ghost" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">
+              ${ICONS.route}<span>Itinéraire Google</span>
+            </a>
+            <a class="btn btn-ghost" href="${wazeUrl(listing)}" target="_blank" rel="noopener">
+              ${ICONS.navigation}<span>Waze</span>
+            </a>
+            <a class="btn btn-whatsapp" href="${whatsappShareUrl(listing)}" target="_blank" rel="noopener">
+              ${ICONS.whatsapp}<span>Partager sur WhatsApp</span>
             </a>
           </div>
         </header>
@@ -1122,8 +1270,19 @@
               <div class="fact-list">
                 <div class="fact"><span class="fact-label">Quartier</span><span class="fact-value">${escapeHtml(listing.neighborhood || 'Bamako')}</span></div>
                 <div class="fact"><span class="fact-label">Adresse</span><span class="fact-value">${escapeHtml(listing.address)}</span></div>
+                ${
+                  listing.landmark
+                    ? `<div class="fact"><span class="fact-label">Repère</span><span class="fact-value">${escapeHtml(listing.landmark)}</span></div>`
+                    : ''
+                }
               </div>
-              <a class="btn btn-soft btn-block" style="margin-top:0.9rem" href="${mapsUrl}" target="_blank" rel="noopener">${ICONS.navigation} Ouvrir dans Google Maps</a>
+              <div id="detail-map" class="detail-map" role="application" aria-label="Carte de ${escapeHtml(listing.name)}"></div>
+              <div class="location-actions">
+                <a class="btn btn-soft" href="${googlePlaceUrl(listing)}" target="_blank" rel="noopener">${ICONS.mapPin} Google Maps</a>
+                <a class="btn btn-soft" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">${ICONS.route} Itinéraire</a>
+                <a class="btn btn-soft" href="${wazeUrl(listing)}" target="_blank" rel="noopener">${ICONS.navigation} Waze</a>
+                <a class="btn btn-soft is-whatsapp" href="${whatsappShareUrl(listing)}" target="_blank" rel="noopener">${ICONS.whatsapp} Partager la position</a>
+              </div>
             </section>
           </div>
 
@@ -1149,7 +1308,8 @@
               <div class="contact-actions">
                 ${listing.phone ? `<a class="btn btn-primary btn-block" href="tel:${escapeHtml(rawPhone)}">${ICONS.phone} Appeler</a>` : ''}
                 ${waNumber ? `<a class="btn btn-ghost btn-block" href="https://wa.me/${escapeHtml(waNumber)}" target="_blank" rel="noopener">${ICONS.whatsapp} Écrire sur WhatsApp</a>` : ''}
-                <a class="btn btn-ghost btn-block" href="${mapsUrl}" target="_blank" rel="noopener">${ICONS.navigation} Itinéraire</a>
+                <a class="btn btn-ghost btn-block" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">${ICONS.route} Itinéraire Google</a>
+                <a class="btn btn-ghost btn-block" href="${wazeUrl(listing)}" target="_blank" rel="noopener">${ICONS.navigation} Itinéraire Waze</a>
               </div>
 
               ${
@@ -1182,6 +1342,7 @@
         }
       </div>`;
 
+    initDetailMap(listing);
   }
 
   /* ------------------------- Formulaire d'ajout --------------------------- */
@@ -1197,6 +1358,8 @@
       subcategories: [],
       neighborhood: '',
       address: '',
+      landmark: '',
+      coords: null,
       phone: '',
       whatsapp: '',
       hours: '',
@@ -1218,6 +1381,7 @@
     draft.name = get('name');
     draft.neighborhood = get('neighborhood');
     draft.address = get('address');
+    draft.landmark = get('landmark');
     draft.phone = get('phone');
     draft.whatsapp = get('whatsapp');
     draft.hours = get('hours');
@@ -1311,6 +1475,8 @@
       subcategories: draft.subcategories,
       neighborhood: draft.neighborhood || 'Quartier à préciser',
       address: draft.address || 'Adresse à préciser',
+      landmark: draft.landmark,
+      coords: draft.coords,
       phone: draft.phone,
       hours: draft.hours || 'Horaires à préciser',
       description: draft.description || 'Votre description apparaîtra ici. Présentez votre commerce en quelques mots.',
@@ -1328,6 +1494,7 @@
   }
 
   function renderAddPage() {
+    destroyMaps();
     const draft = state.addDraft;
     const cat = getCategory(draft.category);
 
@@ -1411,18 +1578,35 @@
 
                 <div class="field">
                   <label for="field-phone">Téléphone <span class="req" aria-hidden="true">*</span></label>
-                  <input class="input" id="field-phone" name="phone" type="tel" required pattern="[0-9+() .-]{8,24}" title="Au moins 8 chiffres, ex. +223 66 12 34 56" value="${escapeHtml(draft.phone)}" placeholder="+223 66 12 34 56" />
+                  <input class="input" id="field-phone" name="phone" type="tel" required pattern="[0-9+\-. ]{8,24}" title="Au moins 8 chiffres, ex. +223 66 12 34 56" value="${escapeHtml(draft.phone)}" placeholder="+223 66 12 34 56" />
                 </div>
 
                 <div class="field span-2">
                   <label for="field-address">Adresse précise <span class="req" aria-hidden="true">*</span></label>
                   <input class="input" id="field-address" name="address" type="text" required maxlength="140" value="${escapeHtml(draft.address)}" placeholder="Rue, repère, immeuble…" />
-                  <span class="hint">Un repère connu (marché, rond-point, mosquée) aide beaucoup.</span>
+                  <span class="hint">Rue, numéro de porte, immeuble ou indication utile.</span>
+                </div>
+
+                <div class="field span-2">
+                  <label for="field-landmark">Repère <span class="hint">(facultatif)</span></label>
+                  <input class="input" id="field-landmark" name="landmark" type="text" maxlength="120" value="${escapeHtml(draft.landmark || '')}" placeholder="Ex. en face de la Pharmacie du Carrefour, à côté de la mosquée…" />
+                  <span class="hint">Beaucoup de rues de Bamako ne portent pas de nom : un repère connu est souvent plus utile que l’adresse.</span>
+                </div>
+
+                <div class="field span-2">
+                  <div class="map-field-head">
+                    <span class="field-label">Position exacte sur la carte <span class="hint">(facultatif, recommandé)</span></span>
+                    <button type="button" class="btn btn-soft btn-sm" data-form-geolocate>
+                      ${ICONS.crosshair} Ma position
+                    </button>
+                  </div>
+                  <div id="add-map" class="form-map" role="application" aria-label="Carte : cliquez pour placer votre adresse"></div>
+                  <p class="form-coords-hint" data-form-coords>Cliquez sur la carte (ou utilisez « Ma position ») pour placer le pin.</p>
                 </div>
 
                 <div class="field">
                   <label for="field-whatsapp">WhatsApp <span class="hint">(facultatif)</span></label>
-                  <input class="input" id="field-whatsapp" name="whatsapp" type="tel" pattern="[0-9+() .-]{8,24}" title="Numéro WhatsApp avec indicatif, ex. +223 66 12 34 56" value="${escapeHtml(draft.whatsapp)}" placeholder="+223 66 12 34 56" />
+                  <input class="input" id="field-whatsapp" name="whatsapp" type="tel" pattern="[0-9+\-. ]{8,24}" title="Numéro WhatsApp avec indicatif, ex. +223 66 12 34 56" value="${escapeHtml(draft.whatsapp)}" placeholder="+223 66 12 34 56" />
                 </div>
 
                 <div class="field">
@@ -1472,6 +1656,32 @@
       </div>`;
 
     updatePreview();
+    initFormMap();
+
+    // « Ma position » : centre la carte sur l'utilisateur et y place le pin.
+    $('[data-form-geolocate]')?.addEventListener('click', async (event) => {
+      const button = event.currentTarget;
+      button.classList.add('is-loading');
+      button.setAttribute('aria-busy', 'true');
+      try {
+        const location = await getCurrentPosition();
+        placeFormPin([location.lat, location.lng]);
+        showToast(
+          `Position placée (précision ${formatDistance(location.accuracy)}). Ajustez le pin en le faisant glisser si besoin.`,
+          { duration: 4200 }
+        );
+      } catch (error) {
+        showToast(
+          error?.code === 'unsupported'
+            ? 'La géolocalisation n’est pas disponible sur cet appareil.'
+            : geolocationErrorMessage(error),
+          { duration: 6000 }
+        );
+      } finally {
+        button.classList.remove('is-loading');
+        button.removeAttribute('aria-busy');
+      }
+    });
 
     // Changement de catégorie : on conserve la saisie, on recharge les champs.
     $('#field-category')?.addEventListener('change', (event) => {
@@ -1537,6 +1747,8 @@
       subcategories: draft.subcategories,
       neighborhood: draft.neighborhood,
       address: draft.address,
+      landmark: draft.landmark || '',
+      coords: Array.isArray(draft.coords) && draft.coords.length === 2 ? draft.coords : null,
       phone: draft.phone,
       whatsapp: draft.whatsapp.replace(/[^\d]/g, ''),
       hours: draft.hours || 'Horaires non communiqués',
@@ -1546,7 +1758,6 @@
       rating: null,
       reviews: 0,
       createdAt: todayISO(),
-      coords: null,
       fields,
       isCustom: true,
     };
@@ -1652,6 +1863,10 @@
     const authModal = $('#auth-modal');
     const isAuthRoute = route.path === '/connexion' || route.path === '/inscription';
     if (authModal && !authModal.hidden && !isAuthRoute) closeAuthModal({ syncRoute: false });
+
+    // Les cartes Leaflet sont liées au DOM : on les détruit avant de remplacer
+    // le contenu de #main (la fenêtre de connexion, elle, garde la page en place).
+    if (!isAuthRoute) destroyMaps();
 
     // Réinitialise le brouillon du formulaire quand on arrive depuis une autre page.
     if (route.path === '/ajouter' && state.previousPath !== '/ajouter') {
@@ -1761,6 +1976,622 @@
     timer = setTimeout(remove, duration);
   }
 
+
+  /* ==========================================================================
+     Cartes, distances et géolocalisation
+     --------------------------------------------------------------------------
+     Leaflet + OpenStreetMap sont auto-hébergés (assets/vendor/leaflet), sans
+     clé API. Les distances sont calculées avec la formule de Haversine.
+     ========================================================================== */
+
+  const EARTH_RADIUS = 6371000; // mètres
+
+  /** Distance orthodromique entre deux points (formule de Haversine), en mètres. */
+  function haversine(lat1, lng1, lat2, lng2) {
+    const toRad = (degrees) => (degrees * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLng = toRad(lng2 - lng1);
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+    return 2 * EARTH_RADIUS * Math.asin(Math.min(1, Math.sqrt(a)));
+  }
+
+  const hasCoords = (listing) =>
+    Array.isArray(listing?.coords) &&
+    listing.coords.length === 2 &&
+    Number.isFinite(Number(listing.coords[0])) &&
+    Number.isFinite(Number(listing.coords[1]));
+
+  /** Distance (m) entre la position de l'utilisateur et une adresse, ou null. */
+  function distanceToListing(listing) {
+    if (!state.userLocation || !hasCoords(listing)) return null;
+    const [lat, lng] = listing.coords;
+    return haversine(state.userLocation.lat, state.userLocation.lng, Number(lat), Number(lng));
+  }
+
+  /** « 850 m », « 1,2 km » — arrondi lisible pour l'interface. */
+  function formatDistance(meters) {
+    if (meters === null || meters === undefined || Number.isNaN(meters)) return '';
+    if (meters < 950) return `${Math.max(10, Math.round(meters / 10) * 10)} m`;
+    const km = meters / 1000;
+    const rounded = km < 9.95 ? Math.round(km * 10) / 10 : Math.round(km);
+    return `${String(rounded).replace('.', ',')} km`;
+  }
+
+  const radiusLabel = (meters) =>
+    (RADIUS_OPTIONS.find((option) => option.value === meters)?.label || formatDistance(meters));
+
+  /** Texte « à 850 m » utilisé sur les cartes et les fiches. */
+  function distanceLabel(listing, { prefix = 'à' } = {}) {
+    if (!state.nearMe) return '';
+    const distance = distanceToListing(listing);
+    if (distance === null) return '';
+    return `${prefix} ${formatDistance(distance)}`;
+  }
+
+  /* --------------------------- Liens externes ----------------------------- */
+  const googleMapsUrl = (listing) => {
+    if (hasCoords(listing)) {
+      const [lat, lng] = listing.coords;
+      return `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+    }
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      `${listing.name}, ${listing.address || ''}, Bamako, Mali`
+    )}`;
+  };
+
+  const googlePlaceUrl = (listing) => {
+    if (hasCoords(listing)) {
+      const [lat, lng] = listing.coords;
+      return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+    }
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+      `${listing.name}, ${listing.address || ''}, Bamako, Mali`
+    )}`;
+  };
+
+  /** Waze : lance la navigation vers un point (ll = latitude, longitude). */
+  const wazeUrl = (listing) => {
+    if (hasCoords(listing)) {
+      const [lat, lng] = listing.coords;
+      return `https://www.waze.com/ul?ll=${lat}%2C${lng}&navigate=yes&zoom=17`;
+    }
+    return `https://www.waze.com/ul?q=${encodeURIComponent(`${listing.name}, Bamako, Mali`)}&navigate=yes`;
+  };
+
+  /** Message WhatsApp partageant la position complète (adresse + repère + lien). */
+  function whatsappShareUrl(listing) {
+    const lines = [
+      `📍 ${listing.name}`,
+      [listing.address, listing.neighborhood].filter(Boolean).join(' · '),
+    ];
+    if (listing.landmark) lines.push(`Repère : ${listing.landmark}`);
+    if (hasCoords(listing)) lines.push(googlePlaceUrl(listing));
+    lines.push('Partagé via BamaHub');
+    return `https://wa.me/?text=${encodeURIComponent(lines.filter(Boolean).join('\n'))}`;
+  }
+
+  /* ------------------------------ Géolocalisation ------------------------- */
+  function geolocationErrorMessage(error) {
+    switch (error?.code) {
+      case 1:
+        return 'Localisation refusée. Autorisez l’accès dans votre navigateur pour voir les adresses autour de vous.';
+      case 2:
+        return 'Position indisponible. Vérifiez votre connexion ou réessayez dans un instant.';
+      case 3:
+        return 'La localisation a pris trop de temps. Réessayez.';
+      default:
+        return 'Impossible d’obtenir votre position.';
+    }
+  }
+
+  /**
+   * Demande la position du navigateur.
+   * @returns {Promise<{lat:number,lng:number,accuracy:number}>}
+   */
+  function getCurrentPosition({ highAccuracy = true } = {}) {
+    return new Promise((resolve, reject) => {
+      if (!('geolocation' in navigator)) {
+        const error = new Error('unsupported');
+        error.code = 'unsupported';
+        reject(error);
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const location = {
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            accuracy: position.coords.accuracy || 0,
+          };
+          state.userLocation = location;
+          state.geoStatus = 'ready';
+          resolve(location);
+        },
+        (error) => {
+          state.geoStatus = error.code === 1 ? 'denied' : 'unavailable';
+          reject(error);
+        },
+        { enableHighAccuracy: highAccuracy, timeout: 12000, maximumAge: 60000 }
+      );
+    });
+  }
+
+  /** Active le mode « Autour de moi » : position + tri par distance. */
+  async function activateNearMe() {
+    const button = $('[data-near-me]');
+    button?.classList.add('is-loading');
+    button?.setAttribute('aria-busy', 'true');
+    state.geoStatus = 'locating';
+    updateNearMeUI();
+
+    try {
+      const location = await getCurrentPosition();
+      state.nearMe = true;
+      state.filters.sort = 'distance';
+      refreshFilterControls();
+      updateExplorerResults();
+      const inside = getFilteredListings().length;
+      showToast(
+        `Position trouvée (précision ${formatDistance(location.accuracy)}) — ${inside} adresse${
+          inside > 1 ? 's' : ''
+        } dans un rayon de ${radiusLabel(state.radius)}.`,
+        { duration: 4600 }
+      );
+    } catch (error) {
+      showToast(
+        error?.code === 'unsupported'
+          ? 'La géolocalisation n’est pas disponible sur cet appareil.'
+          : geolocationErrorMessage(error),
+        { duration: 6000 }
+      );
+      state.geoStatus = 'denied';
+    } finally {
+      button?.classList.remove('is-loading');
+      button?.removeAttribute('aria-busy');
+      updateNearMeUI();
+    }
+  }
+
+  function deactivateNearMe() {
+    state.nearMe = false;
+    if (state.filters.sort === 'distance') state.filters.sort = 'pertinence';
+    refreshFilterControls();
+    updateExplorerResults();
+  }
+
+  async function toggleNearMe() {
+    if (state.nearMe) {
+      deactivateNearMe();
+      return;
+    }
+    if (state.userLocation) {
+      // Position déjà connue : on réactive sans redemander l'autorisation.
+      state.nearMe = true;
+      state.filters.sort = 'distance';
+      refreshFilterControls();
+      updateExplorerResults();
+      return;
+    }
+    await activateNearMe();
+  }
+
+  /** Met à jour les puces de rayon et l'état du bouton « Autour de moi ». */
+  function updateNearMeUI(resultCount = null) {
+    const button = $('[data-near-me]');
+    if (button) {
+      button.classList.toggle('is-active', state.nearMe);
+      button.setAttribute('aria-pressed', String(state.nearMe));
+      button.classList.toggle('is-locating', state.geoStatus === 'locating');
+      const label = button.querySelector('[data-near-me-label]');
+      if (label) label.textContent = state.nearMe ? 'Autour de moi · actif' : 'Autour de moi';
+    }
+
+    const bar = $('[data-near-me-bar]');
+    if (bar) bar.hidden = !state.nearMe;
+
+    $$('[data-radius]').forEach((chip) => {
+      const active = Number(chip.dataset.radius) === state.radius;
+      chip.classList.toggle('is-active', active);
+      chip.setAttribute('aria-pressed', String(active));
+    });
+
+    const info = $('[data-near-me-info]');
+    if (info) {
+      if (!state.nearMe) {
+        info.textContent = '';
+      } else {
+        const count = resultCount ?? getFilteredListings().length;
+        const accuracy = state.userLocation?.accuracy
+          ? ` · précision ${formatDistance(state.userLocation.accuracy)}`
+          : '';
+        info.textContent = `${count} adresse${count > 1 ? 's' : ''} dans un rayon de ${radiusLabel(
+          state.radius
+        )}${accuracy}`;
+      }
+    }
+  }
+
+  /* ------------------------------ Carte Leaflet --------------------------- */
+  const leafletReady = () => Boolean(window.L && window.L.markerClusterGroup);
+
+  /** Icône d'épingle colorée selon la catégorie (avec son pictogramme). */
+  function categoryPinIcon(listing) {
+    const cat = getCategory(listing.category);
+    return L.divIcon({
+      className: 'bh-pin-wrap',
+      html: `<span class="bh-pin" style="--cat:${escapeHtml(cat.color)}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${cat.icon}</svg>
+      </span><span class="sr-only">${escapeHtml(listing.name)} — ${escapeHtml(cat.label)}</span>`,
+      iconSize: [34, 34],
+      iconAnchor: [17, 32],
+      popupAnchor: [0, -30],
+    });
+  }
+
+  const userIcon = () =>
+    L.divIcon({
+      className: 'bh-user-wrap',
+      html: '<span class="bh-user"><span class="bh-user-pulse"></span></span>',
+      iconSize: [22, 22],
+      iconAnchor: [11, 11],
+    });
+
+  const formPinIcon = () =>
+    L.divIcon({
+      className: 'bh-pin-wrap',
+      html: '<span class="bh-pin bh-pin-form"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s7-6.1 7-11a7 7 0 1 0-14 0c0 4.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.4"/></svg></span>',
+      iconSize: [34, 34],
+      iconAnchor: [17, 32],
+    });
+
+  /** Icône de regroupement (clusters) aux couleurs de la marque. */
+  function clusterIcon(cluster) {
+    const count = cluster.getChildCount();
+    const size = count < 10 ? 38 : count < 100 ? 44 : 50;
+    return L.divIcon({
+      className: 'bh-cluster-wrap',
+      html: `<span class="bh-cluster" style="width:${size}px;height:${size}px" role="img"
+        aria-label="${count} adresse${count > 1 ? 's' : ''} à cet endroit">${count}</span>`,
+      iconSize: [size, size],
+    });
+  }
+
+  /** HTML du panneau qui s'ouvre au clic sur un marqueur. */
+  function mapPopupHTML(listing) {
+    const cat = getCategory(listing.category);
+    const price = getPriceInfo(listing);
+    const distance = state.nearMe ? distanceToListing(listing) : null;
+    return `<article class="map-popup" style="--cat:${escapeHtml(cat.color)}">
+      <span class="pill pill-cat">${escapeHtml(cat.label)}</span>
+      <h3 class="map-popup-title">${escapeHtml(listing.name)}</h3>
+      <p class="map-popup-meta">
+        ${escapeHtml(listing.neighborhood || 'Bamako')}
+        ${distance !== null ? `· <strong>${escapeHtml(formatDistance(distance))}</strong>` : ''}
+        ${price ? `· ${escapeHtml(formatNumber(price.value))} FCFA` : ''}
+      </p>
+      <p class="map-popup-address">
+        ${escapeHtml(listing.address || '')}
+        ${listing.landmark ? `<br><span class="map-popup-landmark">${ICONS.mapPin} ${escapeHtml(listing.landmark)}</span>` : ''}
+      </p>
+      <div class="map-popup-actions">
+        <a class="btn btn-primary btn-sm" href="#/adresse/${escapeHtml(listing.id)}">${ICONS.eye} Voir la fiche</a>
+        <a class="map-link" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener" aria-label="Itinéraire Google Maps vers ${escapeHtml(listing.name)}">
+          ${ICONS.route} Google
+        </a>
+        <a class="map-link" href="${wazeUrl(listing)}" target="_blank" rel="noopener" aria-label="Itinéraire Waze vers ${escapeHtml(listing.name)}">
+          ${ICONS.navigation} Waze
+        </a>
+        <a class="map-link is-whatsapp" href="${whatsappShareUrl(listing)}" target="_blank" rel="noopener" aria-label="Partager la position sur WhatsApp — ${escapeHtml(listing.name)}">
+          ${ICONS.whatsapp} WhatsApp
+        </a>
+      </div>
+    </article>`;
+  }
+
+  /** Contrôles de zoom avec libellés français (Leaflet est en anglais). */
+  function addZoomControl(map) {
+    L.control
+      .zoom({ zoomInTitle: 'Zoom avant', zoomOutTitle: 'Zoom arrière', position: 'topleft' })
+      .addTo(map);
+  }
+
+  function addOsmTiles(map) {
+    const layer = L.tileLayer(OSM_URL, {
+      maxZoom: 19,
+      attribution: OSM_ATTRIBUTION,
+    });
+
+    // Ouverture hors connexion (ou aperçu sans réseau) : les tuiles manquent,
+    // mais les épingles, distances et itinéraires restent utilisables.
+    let tileErrors = 0;
+    layer.on('tileerror', () => {
+      tileErrors += 1;
+      if (tileErrors === 8 && !state.mapOfflineNoticeShown) {
+        state.mapOfflineNoticeShown = true;
+        showToast(
+          'Fond de carte indisponible hors connexion. Les épingles, distances et itinéraires restent utilisables.',
+          { duration: 7000 }
+        );
+      }
+    });
+
+    layer.addTo(map);
+    L.control.scale({ imperial: false, position: 'bottomleft' }).addTo(map);
+  }
+
+  function showMapFallback(container, message) {
+    if (!container) return;
+    container.innerHTML = `<div class="map-fallback">
+      ${ICONS.map}
+      <p>${escapeHtml(message)}</p>
+      <p class="hint">La vue Liste reste disponible avec toutes les adresses.</p>
+    </div>`;
+  }
+
+  /** Crée (une seule fois) la carte de l'explorateur. */
+  function ensureExplorerMap() {
+    const container = $('#explorer-map');
+    if (!container) return null;
+
+    if (!leafletReady()) {
+      showMapFallback(
+        container,
+        'La carte n’a pas pu être chargée. Vérifiez votre connexion puis rechargez la page.'
+      );
+      return null;
+    }
+
+    if (state.explorerMap) return state.explorerMap;
+
+    const map = L.map(container, {
+      center: BAMAKO_CENTER,
+      zoom: MAP_DEFAULT_ZOOM,
+      zoomControl: false,
+      // La molette reste dédiée au défilement de la page ; le zoom se fait
+      // avec les boutons + / −, le pincement ou le double-clic.
+      scrollWheelZoom: false,
+      worldCopyJump: false,
+      minZoom: 4,
+      maxZoom: 19,
+    });
+
+    addOsmTiles(map);
+    addZoomControl(map);
+
+    state.clusterLayer = L.markerClusterGroup({
+      showCoverageOnHover: false,
+      spiderfyOnMaxZoom: true,
+      disableClusteringAtZoom: 17,
+      maxClusterRadius: 52,
+      iconCreateFunction: clusterIcon,
+    });
+    map.addLayer(state.clusterLayer);
+
+    state.userLayer = L.layerGroup().addTo(map);
+    state.explorerMap = map;
+    state.mapSignature = '';
+
+    return map;
+  }
+
+  /** Affiche les marqueurs correspondant aux résultats filtrés. */
+  function renderMapMarkers(items) {
+    const map = ensureExplorerMap();
+    if (!map) return;
+
+    const group = state.clusterLayer;
+    const userLayer = state.userLayer;
+    group.clearLayers();
+    userLayer.clearLayers();
+
+    const withCoords = items.filter(hasCoords);
+    const bounds = L.latLngBounds([]);
+
+    withCoords.forEach((listing) => {
+      const marker = L.marker([Number(listing.coords[0]), Number(listing.coords[1])], {
+        icon: categoryPinIcon(listing),
+        title: listing.name,
+        alt: `${listing.name} — ${getCategory(listing.category).label}`,
+        keyboard: true,
+      });
+      marker.bindPopup(mapPopupHTML(listing), {
+        maxWidth: 300,
+        minWidth: 240,
+        autoPanPadding: [26, 26],
+      });
+      group.addLayer(marker);
+      bounds.extend(marker.getLatLng());
+    });
+
+    // Marqueur + cercle de rayon « Autour de moi ».
+    if (state.nearMe && state.userLocation) {
+      const userLatLng = [state.userLocation.lat, state.userLocation.lng];
+      L.marker(userLatLng, { icon: userIcon(), zIndexOffset: 1200, keyboard: false })
+        .addTo(userLayer)
+        .bindPopup(
+          `<div class="map-popup"><strong>Votre position</strong><br><span class="hint">Rayon de recherche : ${escapeHtml(
+            radiusLabel(state.radius)
+          )}</span></div>`
+        );
+      L.circle(userLatLng, {
+        radius: state.radius,
+        color: '#2563eb',
+        weight: 1.5,
+        fillColor: '#2563eb',
+        fillOpacity: 0.07,
+        dashArray: '5 7',
+      }).addTo(userLayer);
+
+      map.fitBounds(L.latLng(userLatLng).toBounds(state.radius * 2), {
+        padding: [24, 24],
+        maxZoom: 16,
+        animate: true,
+      });
+      state.mapSignature = `near:${state.radius}:${withCoords.map((l) => l.id).join(',')}`;
+    } else if (bounds.isValid()) {
+      // On ne recadre que si la sélection a réellement changé (évite les sauts
+      // pendant la frappe dans la recherche).
+      const signature = withCoords.map((listing) => listing.id).join(',');
+      if (signature !== state.mapSignature) {
+        state.mapSignature = signature;
+        clearTimeout(state.mapFitTimer);
+        state.mapFitTimer = setTimeout(() => {
+          if (state.filters.view === 'map') {
+            map.fitBounds(bounds, { padding: [34, 34], maxZoom: 15, animate: true });
+          }
+        }, 180);
+      }
+    } else {
+      map.setView(BAMAKO_CENTER, MAP_DEFAULT_ZOOM);
+    }
+
+    // Taille correcte après un changement de vue (conteneur masqué puis réaffiché).
+    requestAnimationFrame(() => map.invalidateSize());
+
+    const count = withCoords.length;
+    const missing = items.length - count;
+    const shell = $('[data-map-shell]');
+    let note = shell?.querySelector('[data-map-note]');
+    if (shell && !note) {
+      note = document.createElement('p');
+      note.className = 'map-note';
+      note.dataset.mapNote = '';
+      note.setAttribute('aria-live', 'polite');
+      shell.appendChild(note);
+    }
+    if (note) {
+      note.textContent =
+        count === 0
+          ? 'Aucune adresse géolocalisée ne correspond à ces filtres.'
+          : `${count} adresse${count > 1 ? 's' : ''} sur la carte${
+              missing > 0 ? ` · ${missing} sans position` : ''
+            }`;
+    }
+  }
+
+  /** Carte compacte de la fiche détail. */
+  function initDetailMap(listing) {
+    const container = $('#detail-map');
+    if (!container) return;
+    if (!leafletReady()) {
+      showMapFallback(container, 'Carte indisponible hors connexion.');
+      return;
+    }
+    if (!hasCoords(listing)) {
+      showMapFallback(container, 'La position exacte de cette adresse n’a pas encore été renseignée.');
+      return;
+    }
+
+    const [lat, lng] = [Number(listing.coords[0]), Number(listing.coords[1])];
+    const map = L.map(container, {
+      center: [lat, lng],
+      zoom: 16,
+      scrollWheelZoom: false,
+      zoomControl: false,
+    });
+    addOsmTiles(map);
+    addZoomControl(map);
+
+    L.marker([lat, lng], { icon: categoryPinIcon(listing), title: listing.name })
+      .addTo(map)
+      .bindPopup(mapPopupHTML(listing));
+
+    state.detailMap = map;
+    requestAnimationFrame(() => map.invalidateSize());
+  }
+
+  /* --------------------------- Carte du formulaire ------------------------ */
+  function updateFormCoordsHint() {
+    const hint = $('[data-form-coords]');
+    if (!hint) return;
+    const coords = state.addDraft?.coords;
+    hint.innerHTML = coords
+      ? `${ICONS.checkCircle} Position enregistrée : <strong>${Number(coords[0]).toFixed(5)}, ${Number(
+          coords[1]
+        ).toFixed(5)}</strong>`
+      : 'Cliquez sur la carte (ou utilisez « Ma position ») pour placer le pin.';
+    hint.classList.toggle('is-set', Boolean(coords));
+  }
+
+  /** Place (ou déplace) le pin du formulaire. */
+  function placeFormPin(coords, { recenter = true } = {}) {
+    if (!state.formMap || !state.addDraft) return;
+    const lat = Number(Number(coords[0]).toFixed(6));
+    const lng = Number(Number(coords[1]).toFixed(6));
+    state.addDraft.coords = [lat, lng];
+
+    if (!state.formMarker) {
+      state.formMarker = L.marker([lat, lng], {
+        icon: formPinIcon(),
+        draggable: true,
+        keyboard: true,
+        title: 'Position de l’adresse',
+      }).addTo(state.formMap);
+      state.formMarker.on('dragend', () => {
+        const point = state.formMarker.getLatLng();
+        placeFormPin([point.lat, point.lng], { recenter: false });
+      });
+    } else {
+      state.formMarker.setLatLng([lat, lng]);
+    }
+
+    if (recenter) state.formMap.setView([lat, lng], Math.max(state.formMap.getZoom(), 15));
+    updateFormCoordsHint();
+  }
+
+  function initFormMap() {
+    const container = $('#add-map');
+    if (!container || !state.addDraft) return;
+    if (!leafletReady()) {
+      showMapFallback(container, 'La carte n’a pas pu être chargée. Vous pouvez saisir l’adresse et le repère à la main.');
+      return;
+    }
+
+    const draft = state.addDraft;
+    const start = hasCoords(draft) ? [Number(draft.coords[0]), Number(draft.coords[1])] : BAMAKO_CENTER;
+
+    const map = L.map(container, {
+      center: start,
+      zoom: hasCoords(draft) ? 16 : MAP_DEFAULT_ZOOM,
+      scrollWheelZoom: false,
+      zoomControl: false,
+    });
+    addOsmTiles(map);
+    addZoomControl(map);
+    state.formMap = map;
+
+    map.on('click', (event) => placeFormPin([event.latlng.lat, event.latlng.lng], { recenter: false }));
+
+    if (hasCoords(draft)) placeFormPin(draft.coords, { recenter: false });
+    updateFormCoordsHint();
+
+    requestAnimationFrame(() => map.invalidateSize());
+  }
+
+  /** Supprime toutes les instances Leaflet (changement de page). */
+  function destroyMaps() {
+    clearTimeout(state.mapFitTimer);
+    state.mapFitTimer = null;
+    if (state.explorerMap) {
+      state.explorerMap.remove();
+      state.explorerMap = null;
+      state.clusterLayer = null;
+      state.userLayer = null;
+    }
+    if (state.detailMap) {
+      state.detailMap.remove();
+      state.detailMap = null;
+    }
+    if (state.formMap) {
+      state.formMap.remove();
+      state.formMap = null;
+      state.formMarker = null;
+    }
+    state.mapSignature = '';
+  }
 
   /* ==========================================================================
      Écran de démarrage, connexion et compte local

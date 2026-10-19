@@ -9,8 +9,8 @@
  *  Tout commerce est un objet « listing » :
  *
  *    {
- *      id, name, category, subcategories[], neighborhood, address, phone,
- *      description, rating, reviews, createdAt, coords,
+ *      id, name, category, subcategories[], neighborhood, address, landmark,
+ *      phone, description, rating, reviews, createdAt, coords [lat, lng],
  *      fields: { ...valeurs des champs propres à la catégorie }
  *    }
  *
@@ -402,7 +402,9 @@ const NEIGHBORHOODS = [
 
 /**
  * 20 adresses de démonstration réparties dans six quartiers de Bamako.
- * Les coordonnées sont approximatives : elles servent au lien « Itinéraire ».
+ * Les coordonnées sont approximatives : elles servent à la carte, au calcul des
+ * distances et aux liens d'itinéraire. Le champ « landmark » (repère) complète
+ * l'adresse, car beaucoup de rues de Bamako ne portent pas de nom.
  */
 const LISTINGS = [
   {
@@ -412,6 +414,7 @@ const LISTINGS = [
     subcategories: ['Cuisine malienne', 'Grillades'],
     neighborhood: 'Hamdallaye',
     address: 'Hamdallaye ACI 2000, Rue 421',
+    landmark: 'En face de la pharmacie de Hamdallaye',
     phone: '+223 66 12 34 56',
     whatsapp: '22366123456',
     hours: 'Lun – Dim · 11h – 23h',
@@ -436,6 +439,7 @@ const LISTINGS = [
     subcategories: ['Grillades', 'Fast-food'],
     neighborhood: 'ACI 2000',
     address: 'ACI 2000, Rue 138, face à la place de l’Indépendance',
+    landmark: 'Juste après la place de l’Indépendance',
     phone: '+223 76 45 67 89',
     whatsapp: '22376456789',
     hours: 'Lun – Sam · 11h30 – 23h',
@@ -460,6 +464,7 @@ const LISTINGS = [
     subcategories: ['Poisson braisé', 'Cuisine malienne'],
     neighborhood: 'Quartier du fleuve',
     address: 'Quartier du fleuve, près du Pont des Martyrs',
+    landmark: 'À 200 m du Pont des Martyrs, côté fleuve',
     phone: '+223 78 90 12 34',
     hours: 'Mar – Dim · 12h – 23h',
     description:
@@ -483,6 +488,7 @@ const LISTINGS = [
     subcategories: ['Hôtel'],
     neighborhood: 'ACI 2000',
     address: 'ACI 2000, Rue 138, Bamako',
+    landmark: 'Derrière l’immeuble de la BCEAO, ACI 2000',
     phone: '+223 44 90 12 34',
     whatsapp: '22344901234',
     hours: 'Réception 24h/24',
@@ -506,6 +512,7 @@ const LISTINGS = [
     subcategories: ['Auberge', 'Maison d’hôtes'],
     neighborhood: 'Quartier du fleuve',
     address: 'Quartier du fleuve, Rue 20, Bamako',
+    landmark: 'En face du Palais de la Culture Amadou Hampâté Bâ',
     phone: '+223 20 22 45 67',
     hours: 'Réception 24h/24',
     description:
@@ -528,6 +535,7 @@ const LISTINGS = [
     subcategories: ['Pharmacie de quartier', 'Parapharmacie'],
     neighborhood: 'Hamdallaye',
     address: 'Hamdallaye, face au marché de quartier',
+    landmark: 'À côté du marché de Hamdallaye',
     phone: '+223 66 45 78 90',
     whatsapp: '22366457890',
     hours: 'Lun – Dim · 8h – 22h',
@@ -551,6 +559,7 @@ const LISTINGS = [
     subcategories: ['Pharmacie de quartier'],
     neighborhood: 'ACI 2000',
     address: 'ACI 2000, Rue 138, près du rond-point',
+    landmark: 'Au rond-point, en face de la BDM',
     phone: '+223 79 23 45 67',
     hours: 'Lun – Sam · 8h – 20h',
     description:
@@ -573,6 +582,7 @@ const LISTINGS = [
     subcategories: ['Pharmacie de quartier', 'Parapharmacie'],
     neighborhood: 'Badalabougou',
     address: 'Badalabougou Est, Rue 102',
+    landmark: 'Au carrefour de Badalabougou Est',
     phone: '+223 65 34 56 78',
     whatsapp: '22365345678',
     hours: 'Lun – Dim · 8h – 23h',
@@ -596,6 +606,7 @@ const LISTINGS = [
     subcategories: ['Tissus & bazin', 'Prêt-à-porter'],
     neighborhood: 'Badalabougou',
     address: 'Badalabougou Est, Rue 115, Bamako',
+    landmark: 'À 50 m de la grande mosquée de Badalabougou',
     phone: '+223 66 78 90 12',
     hours: 'Lun – Sam · 9h – 19h',
     description:
@@ -618,6 +629,7 @@ const LISTINGS = [
     subcategories: ['Épicerie'],
     neighborhood: 'ACI 2000',
     address: 'ACI 2000, Rue 224, Bamako',
+    landmark: 'À l’angle de la Rue 224 et de la Rue 138',
     phone: '+223 76 12 34 56',
     whatsapp: '22376123456',
     hours: 'Lun – Dim · 8h – 21h',
@@ -641,6 +653,7 @@ const LISTINGS = [
     subcategories: ['Coiffure femme', 'Soins & spa'],
     neighborhood: 'Hamdallaye',
     address: 'Hamdallaye, Rue 319, Bamako',
+    landmark: 'Au-dessus de la quincaillerie Sory, Rue 319',
     phone: '+223 78 23 45 67',
     whatsapp: '22378234567',
     hours: 'Mar – Dim · 9h – 20h',
@@ -664,6 +677,7 @@ const LISTINGS = [
     subcategories: ['Barbershop'],
     neighborhood: 'Magnambougou',
     address: 'Magnambougou, route de Ségou, Bamako',
+    landmark: 'Près de la station Total, route de Ségou',
     phone: '+223 69 45 67 89',
     hours: 'Lun – Sam · 9h – 21h',
     description:
@@ -686,6 +700,7 @@ const LISTINGS = [
     subcategories: ['Mécanique auto', 'Vidange & entretien'],
     neighborhood: 'Kalaban Coura',
     address: 'Kalaban Coura ACI, Rue 59, Bamako',
+    landmark: 'En face du marché de Kalaban Coura',
     phone: '+223 66 90 12 34',
     whatsapp: '22366901234',
     hours: 'Lun – Sam · 7h30 – 19h',
@@ -709,6 +724,7 @@ const LISTINGS = [
     subcategories: ['Carrosserie', 'Mécanique auto'],
     neighborhood: 'Magnambougou',
     address: 'Magnambougou, près du marché, Bamako',
+    landmark: 'Après le pont de Magnambougou, côté droit',
     phone: '+223 70 34 56 78',
     hours: 'Lun – Sam · 8h – 18h30',
     description:
@@ -731,6 +747,7 @@ const LISTINGS = [
     subcategories: ['Primaire', 'Secondaire'],
     neighborhood: 'Badalabougou',
     address: 'Badalabougou Ouest, Rue 88, Bamako',
+    landmark: 'Derrière la pharmacie du Carrefour',
     phone: '+223 20 21 34 56',
     hours: 'Lun – Ven · 7h30 – 17h',
     description:
@@ -752,6 +769,7 @@ const LISTINGS = [
     subcategories: ['Supérieur', 'Formation professionnelle'],
     neighborhood: 'ACI 2000',
     address: 'ACI 2000, Rue 445, Bamako',
+    landmark: 'En face du siège de la BAD, ACI 2000',
     phone: '+223 44 91 23 45',
     whatsapp: '22344912345',
     hours: 'Lun – Ven · 8h – 18h · Sam 9h – 13h',
@@ -774,6 +792,7 @@ const LISTINGS = [
     subcategories: ['Plomberie'],
     neighborhood: 'Kalaban Coura',
     address: 'Kalaban Coura ACI, Rue 214, Bamako',
+    landmark: 'Au carrefour Kalaban Coura ACI',
     phone: '+223 66 23 45 67',
     whatsapp: '22366234567',
     hours: 'Lun – Dim · 7h – 20h · Urgences 24h/24',
@@ -797,6 +816,7 @@ const LISTINGS = [
     subcategories: ['Électricité', 'Froid & climatisation'],
     neighborhood: 'Magnambougou',
     address: 'Magnambougou, secteur 3, Bamako',
+    landmark: 'Près du château d’eau de Magnambougou',
     phone: '+223 76 56 78 90',
     whatsapp: '22376567890',
     hours: 'Lun – Sam · 8h – 19h',
@@ -820,6 +840,7 @@ const LISTINGS = [
     subcategories: ['Salle de fête', 'Décoration'],
     neighborhood: 'Kalaban Coura',
     address: 'Kalaban Coura, Rue 340, Bamako',
+    landmark: 'À côté du marché de Kalaban Coura',
     phone: '+223 78 67 89 01',
     hours: 'Tous les jours · 9h – 00h',
     description:
@@ -841,6 +862,7 @@ const LISTINGS = [
     subcategories: ['Traiteur', 'Animation'],
     neighborhood: 'Hamdallaye',
     address: 'Hamdallaye ACI 2000, Rue 512, Bamako',
+    landmark: 'En face de la pharmacie de la Paix',
     phone: '+223 66 34 56 78',
     whatsapp: '22366345678',
     hours: 'Tous les jours · 8h – 21h',

@@ -43,6 +43,11 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
+  <!-- Leaflet + OpenStreetMap (auto-hébergés, aucune clé API) -->
+  <link rel="stylesheet" href="assets/vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="assets/vendor/leaflet/MarkerCluster.css" />
+  <link rel="stylesheet" href="assets/vendor/leaflet/MarkerCluster.Default.css" />
+
   <link rel="stylesheet" href="style.css" />
 
   <!-- Sans JavaScript, le splash ne doit jamais masquer la page. -->
@@ -221,6 +226,8 @@
     </div>
   </noscript>
 
+  <script src="assets/vendor/leaflet/leaflet.js"></script>
+  <script src="assets/vendor/leaflet/leaflet.markercluster.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
 </body>

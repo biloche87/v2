@@ -14,6 +14,7 @@ dans un navigateur, une identité de marque vectorisée et un manifeste PWA.
 
 - [Lancer le projet](#lancer-le-projet)
 - [Fonctionnalités](#fonctionnalités)
+- [Cartes & géolocalisation](#cartes--géolocalisation)
 - [Identité visuelle & logo](#identité-visuelle--logo)
 - [Connexion & inscription](#connexion--inscription)
 - [Structure des fichiers](#structure-des-fichiers)
@@ -50,9 +51,9 @@ python3 -m http.server 8000
 | Page | Contenu |
 | --- | --- |
 | **Accueil** (`#/`) | Hero + recherche, grille des 9 catégories, « Derniers ajouts », « Populaires », exploration par quartier, appel à l’action |
-| **Explorateur** (`#/explorer`) | Recherche plein texte (nom, description, menu, quartier…), filtres catégorie / sous-catégorie / quartier, filtres rapides (« De garde », « Livraison », « Urgences 24/7 »…), tri (pertinence, note, récents, prix), compteur de résultats, filtres actifs supprimables |
-| **Fiche détail** (`#/adresse/:id`) | Badges, note et avis, description, champs spécifiques à la catégorie (menu, prix/nuit, garde…), contacts cliquables (tél., WhatsApp), itinéraire Google Maps, partage, favori, suppression des adresses créées localement, adresses similaires |
-| **Ajout** (`#/ajouter`) | Formulaire en 3 étapes, champs dynamiques selon la catégorie, sous-catégories à cocher, aperçu en direct de la carte, validation, publication immédiate |
+| **Explorateur** (`#/explorer`) | Recherche plein texte (nom, description, menu, quartier, repère…), filtres catégorie / sous-catégorie / quartier, filtres rapides (« De garde », « Livraison », « Urgences 24/7 »…), tri (pertinence, note, récents, prix, distance), compteur de résultats, filtres actifs supprimables, **bascule Liste / Carte** |
+| **Fiche détail** (`#/adresse/:id`) | Badges, note et avis, description, champs spécifiques à la catégorie (menu, prix/nuit, garde…), contacts cliquables (tél., WhatsApp), **mini-carte**, **repère**, itinéraires **Google Maps et Waze**, **partage de la position sur WhatsApp**, partage, favori, suppression des adresses créées localement, adresses similaires |
+| **Ajout** (`#/ajouter`) | Formulaire en 3 étapes, champs dynamiques selon la catégorie, sous-catégories à cocher, **repère**, **position exacte sur une carte** (clic ou « Ma position »), aperçu en direct de la fiche, validation, publication immédiate |
 | **Favoris** (`#/favoris`) | Adresses enregistrées dans le navigateur, suppression unitaire ou globale |
 | **Connexion / inscription** (`#/connexion`, `#/inscription`) | Fenêtre modale avec illustration de marque, compte local, session mémorisée, compte de démonstration |
 
@@ -72,6 +73,79 @@ Détails d’expérience :
 - **URL partageables** : chaque filtre de l’explorateur est reflété dans le hash,
   chaque fiche possède sa propre adresse.
 
+
+---
+
+## Cartes & géolocalisation
+
+La carte repose sur **Leaflet 1.9.4** et **Leaflet.markercluster 1.5.3**,
+auto-hébergés dans `assets/vendor/leaflet/` (aucun CDN, **aucune clé API**), avec
+les tuiles d’**OpenStreetMap**.
+
+### Trois usages
+
+| Contexte | Contenu |
+| --- | --- |
+| Explorateur, mode **Carte** | Tous les résultats filtrés, épingles colorées par catégorie et regroupées en clusters ; clic sur une épingle → fiche, itinéraires et partage |
+| **Autour de moi** | Position du navigateur, cercle de rayon, adresses triées par distance et limitées à **500 m / 1 km / 5 km** |
+| Fiche & formulaire | Mini-carte de l’adresse ; dans le formulaire, clic sur la carte ou bouton **« Ma position »** pour placer le pin (déplaçable) |
+
+### Distances
+
+La distance est calculée côté client avec la **formule de Haversine**
+(`R = 6 371 km`), sans service externe :
+
+```js
+haversine(12.6392, -8.0029, 12.6450, -7.9970); // ≈ 850 mètres
+formatDistance(850);                            // « 850 m »
+formatDistance(1240);                           // « 1,2 km »
+```
+
+La vue choisie est reflétée dans l’URL : `#/explorer?vue=carte` ouvre
+directement la carte, ce qui permet de partager un lien.
+
+Le mode « Autour de moi » utilise `navigator.geolocation` avec
+`enableHighAccuracy`, un délai de 12 s et des messages d’erreur explicites en cas
+de refus ou d’indisponibilité. **La position reste en mémoire** : elle n’est ni
+stockée ni transmise à un serveur.
+
+> La géolocalisation exige un contexte sécurisé : `http://localhost` ou HTTPS.
+> En `file://`, la carte s’affiche mais le navigateur peut refuser la position.
+
+### Itinéraires et partage
+
+- **Google Maps** : `https://www.google.com/maps/dir/?api=1&destination=<lat>,<lng>`
+- **Waze** : `https://www.waze.com/ul?ll=<lat>%2C<lng>&navigate=yes&zoom=17`
+- **WhatsApp** : message pré-rempli avec le nom, le quartier, l’adresse, le
+  **repère** et le lien de la position, via `https://wa.me/?text=…`
+
+### Coordonnées et repères
+
+Chaque adresse peut porter :
+
+```js
+coords: [12.6394, -8.0135],                     // [latitude, longitude]
+landmark: 'En face de la pharmacie de Hamdallaye' // repère utile
+```
+
+Beaucoup de rues de Bamako ne portent pas de nom : le **repère** est donc un
+champ de premier plan, affiché sur la fiche, dans la popup de la carte et dans
+le message WhatsApp. Les adresses sans coordonnées restent visibles en liste et
+dans la recherche ; la carte indique simplement combien d’adresses n’ont pas de
+position.
+
+### Tuiles OpenStreetMap
+
+Les tuiles sont chargées depuis `https://tile.openstreetmap.org/{z}/{x}/{y}.png`
+avec l’attribution obligatoire « © OpenStreetMap contributors ». Hors connexion,
+elles ne se chargent pas : les épingles, les distances et les itinéraires restent
+utilisables et un message discret le signale. Ce projet de démonstration
+génère un trafic négligeable ; pour un déploiement à forte audience, utilisez un
+fournisseur de tuiles ou un cache conforme à la
+[politique d’utilisation d’OpenStreetMap](https://operations.osmfoundation.org/policies/tiles/).
+
+Le mode sombre applique un filtre CSS aux tuiles (inversion + rotation de teinte)
+pour rester lisible sans second jeu de tuiles.
 
 ---
 
@@ -183,10 +257,14 @@ data.js             CONFIG des catégories + 20 adresses de démonstration
 manifest.json       Manifeste PWA (icônes, couleurs, raccourcis)
 favicon.ico         Favicon multi-tailles (16, 32, 48)
 assets/logo/        Logo vectorisé et déclinaisons (voir ci-dessous)
+assets/vendor/leaflet/
+                    Leaflet 1.9.4 + markercluster 1.5.3 auto-hébergés
+                    (JS, CSS, images et licences)
 ```
 
 Soit **quatre fichiers de code** (`index.html`, `style.css`, `app.js`, `data.js`)
-plus les ressources de marque (`manifest.json`, `favicon.ico`, `assets/logo/`).
+plus les ressources de marque (`manifest.json`, `favicon.ico`, `assets/logo/`) et
+la bibliothèque de cartes auto-hébergée (`assets/vendor/leaflet/`).
 
 Répartition volontairement nette :
 
@@ -209,6 +287,7 @@ Tout commerce est un **listing** générique :
   subcategories: ['Cuisine malienne'],  // zéro, une ou plusieurs sous-catégories
   neighborhood: 'Hamdallaye',
   address: 'Hamdallaye ACI 2000, Rue 421',
+  landmark: 'En face de la pharmacie de Hamdallaye', // repère (rues souvent sans nom)
   phone: '+223 66 12 34 56',
   whatsapp: '22366123456',              // sans « + », pour wa.me
   hours: 'Lun – Dim · 11h – 23h',
@@ -216,7 +295,7 @@ Tout commerce est un **listing** générique :
   rating: 4.8,                          // null pour une nouvelle adresse
   reviews: 214,
   createdAt: '2026-10-12',              // sert à « Derniers ajouts » et au badge « Nouveau »
-  coords: [12.6394, -8.0135],           // facultatif : lien Itinéraire
+  coords: [12.6394, -8.0135],           // [lat, lng] : carte, distance, itinéraires
   fields: {                             // champs propres à la catégorie
     menu: 'Riz au gras — 2 500 FCFA\nCapitaine braisé — 4 500 FCFA',
     platDuJour: 'Riz au gras au poulet',
@@ -338,7 +417,8 @@ booléen correspondant (`onDuty`, `delivery`, `urgent`, `enrollmentOpen`,
 `data.js` contient **20 adresses fictives réalistes** réparties dans six
 quartiers de Bamako — Hamdallaye, ACI 2000, Badalabougou, Kalaban Coura,
 Magnambougou, Quartier du fleuve — avec des prix en FCFA, des numéros au format
-malien (`+223 …`) et des coordonnées approximatives pour le lien d’itinéraire.
+malien (`+223 …`), un **repère** et des coordonnées approximatives utilisées par
+la carte, les distances et les itinéraires.
 
 > ⚠️ Commerces, numéros et tarifs sont inventés pour la démonstration. Aucune
 > donnée n’est envoyée vers un serveur : favoris, thème et adresses ajoutées
