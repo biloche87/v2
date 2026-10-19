@@ -7994,3 +7994,19 @@ body.has-modal {
 [data-theme='dark'] .ev-cal-cell.has-events {
   background: color-mix(in srgb, var(--brand) 16%, var(--surface));
 }
+
+@media (min-width: 860px) {
+  .ev-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  .ev-hero-text {
+    min-width: 0;
+  }
+
+  .ev-hero-cta {
+    justify-self: end;
+    margin-bottom: 0.2rem;
+  }
+}

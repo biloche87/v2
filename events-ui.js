@@ -936,6 +936,15 @@
 
   function render(main) {
     if (!main) return;
+    if (!EV()) {
+      main.innerHTML = `<div class="container" style="padding:2rem 1rem">
+        <div class="ev-empty">
+          <p>Le module Événements n’a pas pu être chargé. Rechargez la page.</p>
+          <a class="btn btn-ghost btn-sm" href="#/">Retour à l’accueil</a>
+        </div>
+      </div>`;
+      return;
+    }
     destroyMap();
     main.innerHTML = pageTemplate();
     mounted = true;
@@ -1793,7 +1802,10 @@
   };
 
   function boot() {
-    if (!EV() || !window.BamaHubEventsUI) return;
+    if (!EV()) {
+      console.warn('[events-ui] events-data.js absent : module Événements inactif.');
+      return;
+    }
     EV()
       .init()
       .then(() => {
