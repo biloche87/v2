@@ -188,6 +188,19 @@
   const catLabel = (cat) =>
     getLang() === 'bm' && cat?.labelBm ? cat.labelBm : cat?.label || '';
 
+  /** Libellé d'un champ de formulaire dans la langue active. */
+  const fieldLabel = (field) =>
+    getLang() === 'bm' && field?.labelBm ? field.labelBm : field?.label || '';
+
+  /** Valeurs « oui / non » d'un champ booléen dans la langue active. */
+  const fieldValueLabels = (field) => {
+    const labels =
+      getLang() === 'bm' && field?.valueLabelsBm
+        ? field.valueLabelsBm
+        : field?.valueLabels || { true: 'Oui', false: 'Non' };
+    return labels;
+  };
+
   /* ----------------------------- Horaires -------------------------------- */
 
   const DAY_INDEX = { dim: 0, lun: 1, mar: 2, mer: 3, jeu: 4, ven: 5, sam: 6 };
@@ -964,7 +977,7 @@
   /** Bouton cœur des cartes : bascule l'état favori sans quitter la page. */
   function favoriteButton(listing) {
     const active = state.favorites.has(listing.id);
-    const label = active ? 'Retirer des favoris' : 'Ajouter aux favoris';
+    const label = active ? t('detail.unfavorite') : t('detail.favorite');
     return `<button type="button" class="fav-btn${active ? ' is-active' : ''}"
       data-favorite="${escapeHtml(listing.id)}"
       aria-pressed="${active}"
@@ -1392,8 +1405,8 @@
 
     if (!available.length) return '';
 
-    return `<div class="quick-filters" role="group" aria-label="Filtres rapides">
-      <span class="label">${getLang() === 'bm' ? 'Filtriw' : 'Filtres rapides'}</span>
+    return `<div class="quick-filters" role="group" aria-label="${escapeHtml(t('explore.quickGroup'))}">
+      <span class="label">${escapeHtml(t('explore.quickLabel'))}</span>
       ${available
         .map((quick) => {
           const active = filters.quick === quick.id;
@@ -1406,9 +1419,9 @@
   }
 
   function categoryChipsHTML(filters) {
-    return `<div class="category-chips" role="group" aria-label="Filtrer par catégorie">
+    return `<div class="category-chips" role="group" aria-label="${escapeHtml(t('explore.filterByCat'))}">
       <button type="button" class="chip${filters.cat === '' ? ' is-active' : ''}" data-cat="" aria-pressed="${filters.cat === ''}">
-        ${escapeHtml(getLang() === 'bm' ? 'Bɛɛ' : 'Toutes')} <span class="chip-count">${state.listings.length}</span>
+        ${escapeHtml(t('explore.all'))} <span class="chip-count">${state.listings.length}</span>
       </button>
       ${CATEGORIES.map((cat) => {
         const count = state.listings.filter((listing) => listing.category === cat.id).length;
@@ -2030,10 +2043,10 @@
 
   /* ----------------------------- Fiche détail ----------------------------- */
   function statusFact(field, value) {
-    const labels = field.valueLabels || { true: 'Oui', false: 'Non' };
+    const labels = fieldValueLabels(field);
     const text = labels[value ? 'true' : 'false'] || (value ? 'Oui' : 'Non');
     const statusIcon = value ? ICONS.checkCircle : ICONS.xCircle;
-    return `<div class="fact"><span class="fact-label">${escapeHtml(field.label)}</span>
+    return `<div class="fact"><span class="fact-label">${escapeHtml(fieldLabel(field))}</span>
       <span class="status ${value ? 'status-yes' : 'status-no'}">${statusIcon} ${escapeHtml(text)}</span></div>`;
   }
 
@@ -2047,7 +2060,7 @@
       if (field.suffix) text += ` ${field.suffix}`;
       if (field.prefix) text = `${field.prefix} ${text}`;
     }
-    return `<div class="fact"><span class="fact-label">${escapeHtml(field.label)}</span><span class="fact-value">${escapeHtml(text)}</span></div>`;
+    return `<div class="fact"><span class="fact-label">${escapeHtml(fieldLabel(field))}</span><span class="fact-value">${escapeHtml(text)}</span></div>`;
   }
 
   /** Transforme un texte multi-lignes en liste (avec prix si « — » présent). */
@@ -2073,10 +2086,20 @@
 
   /* ------------------------ Avis : rendu et formulaires ------------------- */
 
+  // Mois bambara : Intl ne fournit pas encore de locale « bm » fiable dans
+  // les navigateurs, on garde donc une liste locale explicite.
+  const BM_MONTHS = [
+    'zanwuye', 'feburuye', 'marisi', 'awirili', 'mɛ', 'zuwɛn',
+    'zuluye', 'uti', 'sɛtanburu', 'ɔkutɔburu', 'nowanburu', 'desanburu',
+  ];
+
   function formatDate(dateString) {
     if (!dateString) return '';
     const date = new Date(`${dateString}T12:00:00`);
     if (Number.isNaN(date.getTime())) return dateString;
+    if (getLang() === 'bm') {
+      return `${date.getDate()} ${BM_MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+    }
     return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
   }
 
@@ -2151,6 +2174,10 @@
   function reviewsPanelMarkup(listing) {
     const reviews = reviewsFor(listing.id);
     const { avg, count } = aggregateRating(listing);
+    // La répartition n'a de sens que si l'on connaît tous les avis. Les fiches
+    // de démonstration affichent une note agrégée (214 avis) mais seulement
+    // quelques avis détaillés : on n'invente donc pas de pourcentages.
+    const completeSample = count === reviews.length;
     const distribution = [5, 4, 3, 2, 1].map((note) => {
       const total = reviews.filter((review) => Math.round(review.rating) === note).length;
       return { note, total, pct: reviews.length ? Math.round((total / reviews.length) * 100) : 0 };
@@ -2171,18 +2198,23 @@
                   <span class="count">${escapeHtml(t('detail.reviewsCount', { n: formatNumber(count) }))}</span>
                 </span>
               </div>
-              <div class="rating-bars" aria-label="${escapeHtml(t('detail.review.distribution'))}">
-                <p class="settings-hint" style="margin:0 0 0.15rem">${escapeHtml(t('detail.review.shown', { n: reviews.length }))}</p>
-                ${distribution
-                  .map(
-                    (entry) => `<div class="rating-bar">
-                      <span>${entry.note}</span>
-                      <span class="bar"><span style="width:${entry.pct}%"></span></span>
-                      <span>${entry.pct}%</span>
+              ${
+                completeSample
+                  ? `<div class="rating-bars" aria-label="${escapeHtml(t('detail.review.distribution'))}">
+                      ${distribution
+                        .map(
+                          (entry) => `<div class="rating-bar">
+                            <span>${entry.note}</span>
+                            <span class="bar"><span style="width:${entry.pct}%"></span></span>
+                            <span>${entry.pct}%</span>
+                          </div>`
+                        )
+                        .join('')}
                     </div>`
-                  )
-                  .join('')}
-              </div>
+                  : `<p class="review-sample-note">${ICONS.info} ${escapeHtml(
+                      t('detail.review.sample', { total: formatNumber(count), shown: reviews.length })
+                    )}</p>`
+              }
             </div>`
           : ''
       }
@@ -2430,7 +2462,7 @@
     const contentPanels = contentFields
       .map(
         (field) => `<section class="panel">
-          <h2 class="panel-title">${ICONS.checkCircle} ${escapeHtml(field.label)}</h2>
+          <h2 class="panel-title">${ICONS.checkCircle} ${escapeHtml(fieldLabel(field))}</h2>
           ${linesMarkup(listing.fields[field.key])}
         </section>`
       )
@@ -2457,7 +2489,7 @@
               <div class="detail-badge-row">
                 <span class="pill pill-cat">${escapeHtml(catLabel(cat))}</span>
                 ${statuses.map((badge) => `<span class="pill pill-success pill-dot">${escapeHtml(badge)}</span>`).join('')}
-                ${isNew(listing.createdAt) ? `<span class="pill pill-outline">${escapeHtml(t('card.new'))}</span>` : ''}
+                ${isNew(listing.createdAt) && rating.count < 10 ? `<span class="pill pill-outline">${escapeHtml(t('card.new'))}</span>` : ''}
                 ${listing.isCustom ? `<span class="pill pill-outline">${escapeHtml(t('detail.yourAddress'))}</span>` : ''}
                 ${trustBadge(listing, { label: true })}
                 ${promoFor(listing.id) ? `<span class="promo-badge">${ICONS.tag}${escapeHtml(t('detail.promo.title'))}</span>` : ''}
@@ -2480,22 +2512,22 @@
               </p>
               ${
                 listing.landmark
-                  ? `<p class="detail-landmark">${ICONS.crosshair}<span><strong>Repère :</strong> ${escapeHtml(listing.landmark)}</span></p>`
+                  ? `<p class="detail-landmark">${ICONS.crosshair}<span><strong>${escapeHtml(t('detail.landmark'))} :</strong> ${escapeHtml(listing.landmark)}</span></p>`
                   : ''
               }
-              ${distanceLabel(listing) ? `<p class="detail-distance">${ICONS.target} Vous êtes ${escapeHtml(distanceLabel(listing))} de cette adresse.</p>` : ''}
+              ${distanceLabel(listing) ? `<p class="detail-distance">${ICONS.target} ${escapeHtml(t('detail.distanceYou', { distance: distanceLabel(listing) }))}</p>` : ''}
             </div>
           </div>
 
           <div class="detail-actions">
-            <button type="button" class="btn ${isFavorite ? 'btn-soft' : 'btn-ghost'}" data-favorite="${escapeHtml(listing.id)}" aria-pressed="${isFavorite}" aria-label="${isFavorite ? 'Retirer des favoris' : 'Ajouter aux favoris'} — ${escapeHtml(listing.name)}">
-              ${ICONS.heart}<span data-fav-label>${isFavorite ? 'Enregistré' : 'Favori'}</span>
+            <button type="button" class="btn ${isFavorite ? 'btn-soft' : 'btn-ghost'}" data-favorite="${escapeHtml(listing.id)}" aria-pressed="${isFavorite}" aria-label="${isFavorite ? escapeHtml(t('detail.unfavorite')) : escapeHtml(t('detail.favorite'))} — ${escapeHtml(listing.name)}">
+              ${ICONS.heart}<span data-fav-label>${isFavorite ? escapeHtml(t('detail.saved')) : escapeHtml(t('detail.favorite'))}</span>
             </button>
             <button type="button" class="btn btn-ghost" data-share="${escapeHtml(listing.id)}">
-              ${ICONS.share}<span>Partager</span>
+              ${ICONS.share}<span>${escapeHtml(t('detail.share'))}</span>
             </button>
             <a class="btn btn-ghost" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">
-              ${ICONS.route}<span>Itinéraire Google</span>
+              ${ICONS.route}<span>${escapeHtml(t('detail.google'))}</span>
             </a>
             <a class="btn btn-ghost" href="${wazeUrl(listing)}" target="_blank" rel="noopener">
               ${ICONS.navigation}<span>Waze</span>
@@ -2577,7 +2609,7 @@
               ${
                 priceInfo
                   ? `<div class="price-block">
-                      <span class="price-caption">${escapeHtml(priceInfo.field.label)}</span>
+                      <span class="price-caption">${escapeHtml(fieldLabel(priceInfo.field))}</span>
                       <div class="price-main">${priceMarkup(listing, { detailed: true })}</div>
                       <p class="price-hint">${escapeHtml(t('detail.priceHint'))}</p>
                     </div>`
@@ -2701,7 +2733,7 @@
 
     if (field.type === 'textarea') {
       return `<div class="field span-2">
-        <label for="${id}">${escapeHtml(field.label)}${requiredMark}</label>
+        <label for="${id}">${escapeHtml(fieldLabel(field))}${requiredMark}</label>
         <textarea class="textarea" id="${id}" name="${escapeHtml(field.key)}" rows="4" placeholder="${escapeHtml(field.placeholder || '')}"${required}>${escapeHtml(value || '')}</textarea>
         ${hint}
       </div>`;
@@ -2710,13 +2742,13 @@
     if (field.type === 'boolean') {
       return `<label class="checkbox-row" for="${id}">
         <input type="checkbox" id="${id}" name="${escapeHtml(field.key)}"${value ? ' checked' : ''} />
-        <span><strong>${escapeHtml(field.label)}</strong>${field.valueLabels ? `<br /><span class="hint">${escapeHtml(field.valueLabels.true)} / ${escapeHtml(field.valueLabels.false)}</span>` : ''}</span>
+        <span><strong>${escapeHtml(fieldLabel(field))}</strong>${field.valueLabels || field.valueLabelsBm ? `<br /><span class="hint">${escapeHtml(fieldValueLabels(field).true)} / ${escapeHtml(fieldValueLabels(field).false)}</span>` : ''}</span>
       </label>`;
     }
 
     if (field.type === 'select' && field.options) {
       return `<div class="field">
-        <label for="${id}">${escapeHtml(field.label)}${requiredMark}</label>
+        <label for="${id}">${escapeHtml(fieldLabel(field))}${requiredMark}</label>
         <select class="select" id="${id}" name="${escapeHtml(field.key)}"${required}>
           <option value="">Choisir…</option>
           ${field.options
@@ -2732,7 +2764,7 @@
 
     if (field.type === 'number') {
       return `<div class="field">
-        <label for="${id}">${escapeHtml(field.label)}${requiredMark}${field.money ? ' <span class="hint">(FCFA)</span>' : ''}</label>
+        <label for="${id}">${escapeHtml(fieldLabel(field))}${requiredMark}${field.money ? ' <span class="hint">(FCFA)</span>' : ''}</label>
         <input class="input" id="${id}" name="${escapeHtml(field.key)}" type="number" inputmode="numeric"
           value="${escapeHtml(value ?? '')}" placeholder="${escapeHtml(field.placeholder || '')}"
           ${field.min !== undefined ? `min="${field.min}"` : ''} ${field.step !== undefined ? `step="${field.step}"` : 'step="1"'}${required} />
@@ -2741,7 +2773,7 @@
     }
 
     return `<div class="field">
-      <label for="${id}">${escapeHtml(field.label)}${requiredMark}</label>
+      <label for="${id}">${escapeHtml(fieldLabel(field))}${requiredMark}</label>
       <input class="input" id="${id}" name="${escapeHtml(field.key)}" type="text"
         value="${escapeHtml(value || '')}" placeholder="${escapeHtml(field.placeholder || '')}"${required} />
       ${hint}
@@ -2807,7 +2839,7 @@
                 <span class="form-step">1</span>
                 <div>
                   <h2>${escapeHtml(t('add.identite'))}</h2>
-                  <p>Le nom, la catégorie et les spécialités de votre commerce.</p>
+                  <p>${escapeHtml(t('add.identiteHint'))}</p>
                 </div>
               </div>
 
@@ -2838,7 +2870,7 @@
                           <span>${escapeHtml(sub)}</span>
                         </label>`
                       )
-                      .join('') || '<span class="hint">Aucune sous-catégorie pour cette catégorie.</span>'}
+                      .join('') || `<span class="hint">${escapeHtml(t('add.noSubcategories'))}</span>`}
                   </div>
                 </div>
               </div>
@@ -2849,7 +2881,7 @@
                 <span class="form-step">2</span>
                 <div>
                   <h2>${escapeHtml(t('add.localisation'))}</h2>
-                  <p>Pour que les habitants puissent vous trouver et vous appeler.</p>
+                  <p>${escapeHtml(t('add.localisationHint'))}</p>
                 </div>
               </div>
 
@@ -2867,7 +2899,7 @@
 
                 <div class="field">
                   <label for="field-phone">${escapeHtml(t('add.phone'))} <span class="req" aria-hidden="true">*</span></label>
-                  <input class="input" id="field-phone" name="phone" type="tel" required pattern="[0-9+\-. ]{8,24}" title="Au moins 8 chiffres, ex. +223 66 12 34 56" value="${escapeHtml(draft.phone)}" placeholder="+223 66 12 34 56" />
+                  <input class="input" id="field-phone" name="phone" type="tel" required pattern="[0-9+\-. ]{8,24}" title="${escapeHtml(t('add.phoneTitle'))}" value="${escapeHtml(draft.phone)}" placeholder="+223 66 12 34 56" />
                 </div>
 
                 <div class="field span-2">
@@ -2895,7 +2927,7 @@
 
                 <div class="field">
                   <label for="field-whatsapp">WhatsApp <span class="hint">(${escapeHtml(t('add.optional'))})</span></label>
-                  <input class="input" id="field-whatsapp" name="whatsapp" type="tel" pattern="[0-9+\-. ]{8,24}" title="Numéro WhatsApp avec indicatif, ex. +223 66 12 34 56" value="${escapeHtml(draft.whatsapp)}" placeholder="+223 66 12 34 56" />
+                  <input class="input" id="field-whatsapp" name="whatsapp" type="tel" pattern="[0-9+\-. ]{8,24}" title="${escapeHtml(t('add.whatsappTitle'))}" value="${escapeHtml(draft.whatsapp)}" placeholder="+223 66 12 34 56" />
                 </div>
 
                 <div class="field">
@@ -2915,7 +2947,7 @@
                 <span class="form-step">3</span>
                 <div>
                   <h2>${escapeHtml(t('add.details', { cat: catLabel(cat) }))}</h2>
-                  <p>Ces champs s’adaptent automatiquement à la catégorie choisie.</p>
+                  <p>${escapeHtml(t('add.detailsHint'))}</p>
                 </div>
               </div>
 
@@ -2925,7 +2957,7 @@
             </section>
 
             <div class="form-actions">
-              <a class="btn btn-ghost" href="#/explorer">Annuler</a>
+              <a class="btn btn-ghost" href="#/explorer">${escapeHtml(t('common.cancel'))}</a>
               <button class="btn btn-primary" type="submit">${ICONS.plus} ${escapeHtml(t('add.publish'))}</button>
             </div>
             <p class="form-note">En publiant, vous confirmez que les informations sont exactes. Cet annuaire est une démonstration : les données restent dans votre navigateur.</p>
@@ -3474,7 +3506,7 @@
       button.setAttribute('aria-pressed', String(state.nearMe));
       button.classList.toggle('is-locating', state.geoStatus === 'locating');
       const label = button.querySelector('[data-near-me-label]');
-      if (label) label.textContent = state.nearMe ? 'Autour de moi · actif' : 'Autour de moi';
+      if (label) label.textContent = state.nearMe ? t('explore.nearMeActive') : t('explore.nearMe');
     }
 
     const bar = $('[data-near-me-bar]');
@@ -3921,7 +3953,7 @@
   function updateAccountUI() {
     const signed = isSignedIn();
     const account = state.session;
-    const label = signed ? account.name.split(' ')[0] : 'Se connecter';
+    const label = signed ? account.name.split(' ')[0] : t('auth.loginAction');
     const initials = signed ? initialsOf(account.name) : '?';
 
     $$('[data-auth-label]').forEach((element) => {
@@ -3934,7 +3966,7 @@
       element.classList.toggle('is-signed-in', signed);
       element.setAttribute(
         'aria-label',
-        signed ? `Compte de ${account.name}` : 'Se connecter ou créer un compte'
+        signed ? t('auth.accountAria', { name: account.name }) : t('auth.loginAria')
       );
       element.dataset.authOpen = signed ? 'account' : 'login';
     });
@@ -4314,11 +4346,11 @@
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-pressed', String(active));
       const listing = getListing(listingId);
-      const label = active ? 'Retirer des favoris' : 'Ajouter aux favoris';
+      const label = active ? t('detail.unfavorite') : t('detail.favorite');
       if (listing) button.setAttribute('aria-label', `${label} — ${listing.name}`);
-      button.setAttribute('title', active ? 'Retirer des favoris' : 'Ajouter aux favoris');
+      button.setAttribute('title', active ? t('detail.unfavorite') : t('detail.favorite'));
       const labelSpan = button.querySelector('[data-fav-label]');
-      if (labelSpan) labelSpan.textContent = active ? 'Enregistré' : 'Favori';
+      if (labelSpan) labelSpan.textContent = active ? t('detail.saved') : t('detail.favorite');
       if (button.classList.contains('btn')) {
         button.classList.toggle('btn-soft', active);
         button.classList.toggle('btn-ghost', !active);
@@ -4336,8 +4368,8 @@
       persistFavorites();
       updateFavoriteButtons(listingId);
       updateFavoritesCount();
-      showToast(`« ${listing.name} » retiré des favoris.`, {
-        actionLabel: 'Annuler',
+      showToast(t('toast.favoriteRemoved', { name: listing.name }), {
+        actionLabel: t('common.cancel'),
         onAction: () => {
           state.favorites.add(listingId);
           persistFavorites();
@@ -4352,8 +4384,8 @@
       persistFavorites();
       updateFavoriteButtons(listingId);
       updateFavoritesCount();
-      showToast('Ajouté à vos favoris.', {
-        actionLabel: 'Voir',
+      showToast(t('toast.favoriteAdded', { name: listing.name }), {
+        actionLabel: t('toast.view'),
         onAction: () => {
           location.hash = '#/favoris';
         },
@@ -4439,6 +4471,7 @@
     const changed = window.BamaHubI18n.setLang(lang);
     syncLangButton();
     syncSettingsUI();
+    updateAccountUI();
     renderRoute();
     showToast(t('toast.language', { lang: window.BamaHubI18n.getName(changed) }));
   }

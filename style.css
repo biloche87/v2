@@ -5573,6 +5573,27 @@ body.auth-open {
   gap: 0.25rem;
 }
 
+.review-sample-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.review-sample-note svg {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  margin-top: 0.1rem;
+  color: var(--brand);
+}
+
 .rating-bar {
   display: grid;
   grid-template-columns: 14px 1fr 26px;
