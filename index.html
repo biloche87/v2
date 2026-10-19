@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="fr" data-theme="light">
+<html lang="fr" data-theme="light" data-lang="fr">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -54,7 +54,7 @@
   <noscript><style>.splash { display: none !important; }</style></noscript>
 </head>
 <body>
-  <a class="skip-link" href="#main" data-skip-link>Aller au contenu principal</a>
+  <a class="skip-link" href="#main" data-skip-link data-i18n="nav.skip">Aller au contenu principal</a>
 
   <!-- ===================== Sprite du logo ===================== -->
     <!-- Logo BamaHub — sprite inline généré depuis /assets/logo/*.svg.
@@ -100,14 +100,26 @@
       <span class="brand-badge">Bamako</span>
 
       <nav class="main-nav" aria-label="Navigation principale">
-        <a href="#/" data-nav="home">Accueil</a>
-        <a href="#/explorer" data-nav="explore">Explorer</a>
+        <a href="#/" data-nav="home" data-i18n="nav.home">Accueil</a>
+        <a href="#/explorer" data-nav="explore" data-i18n="nav.explore">Explorer</a>
         <a href="#/favoris" data-nav="favorites" class="nav-favorites">
-          Favoris <span class="nav-count" id="nav-fav-count" hidden>0</span>
+          <span data-i18n="nav.favorites">Favoris</span> <span class="nav-count" id="nav-fav-count" hidden>0</span>
         </a>
       </nav>
 
       <div class="header-actions">
+        <button type="button" class="icon-btn lang-btn" data-lang-toggle aria-label="Changer de langue" title="Français / Bamanankan">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z" /></svg>
+          <span class="lang-btn-label" data-lang-label>FR</span>
+        </button>
+
+        <button type="button" class="icon-btn" data-settings-open aria-label="Ouvrir les paramètres" data-i18n-label="nav.settings" title="Paramètres">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z" />
+          </svg>
+        </button>
+
         <button type="button" class="account-btn" data-auth-open="login" aria-label="Se connecter ou créer un compte">
           <span class="avatar" data-auth-avatar aria-hidden="true">?</span>
           <span class="account-label" data-auth-label>Se connecter</span>
@@ -124,7 +136,7 @@
         </button>
         <a href="#/ajouter" class="btn btn-primary btn-sm header-add">
           <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
-          <span>Ajouter</span>
+          <span data-i18n="nav.add">Ajouter</span>
         </a>
       </div>
     </div>
@@ -141,19 +153,22 @@
           <img src="assets/logo/logo-white.svg" alt="BamaHub" width="312" height="100" loading="lazy" />
         </a>
         <p>L’annuaire local de Bamako, pensé pour les habitants et les visiteurs. Bonnes adresses, horaires et contacts, au même endroit.</p>
-        <p class="footer-tagline">Le répertoire local de Bamako</p>
+        <p class="footer-tagline" data-i18n="footer.tagline">Le répertoire local de Bamako</p>
       </div>
       <nav class="footer-links" aria-label="Liens du pied de page">
-        <h2>Découvrir</h2>
-        <a href="#/explorer">Toutes les adresses</a>
+        <h2 data-i18n="footer.nav">Découvrir</h2>
+        <a href="#/explorer" data-i18n="explore.title">Toutes les adresses</a>
         <a href="#/explorer?cat=restaurants">Restaurants</a>
-        <a href="#/explorer?cat=pharmacies">Pharmacies de garde</a>
-        <a href="#/favoris">Mes favoris</a>
+        <a href="#/explorer?quick=duty" data-i18n="footer.duty">Pharmacies de garde</a>
+        <a href="#/explorer?quick=open" data-i18n="explore.onlyOpen">Ouvert maintenant</a>
+        <a href="#/favoris" data-i18n="nav.favorites">Mes favoris</a>
+        <a href="#/explorer?quick=promo" data-i18n="quick.promo">En promotion</a>
       </nav>
       <div class="footer-note">
         <h2>À propos</h2>
         <p>Projet de démonstration — les commerces, numéros et tarifs sont fictifs. Aucune donnée n’est envoyée sur un serveur.</p>
         <p class="footer-copy">© 2026 BamaHub · Bamako, Mali</p>
+        <button type="button" class="footer-settings-link" data-settings-open data-i18n="footer.settings">Paramètres</button>
       </div>
     </div>
   </footer>
@@ -164,29 +179,29 @@
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="m3 10 9-7 9 7v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /><path d="M9 21v-7h6v7" />
       </svg>
-      <span>Accueil</span>
+      <span data-i18n="nav.home">Accueil</span>
     </a>
     <a href="#/explorer" data-nav="explore">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
       </svg>
-      <span>Explorer</span>
+      <span data-i18n="nav.explore">Explorer</span>
     </a>
     <a href="#/favoris" data-nav="favorites">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z" />
       </svg>
-      <span>Favoris</span>
+      <span data-i18n="nav.favorites">Favoris</span>
     </a>
     <a href="#/ajouter" data-nav="add">
       <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <circle cx="12" cy="12" r="9" /><path d="M12 8v8M8 12h8" />
       </svg>
-      <span>Ajouter</span>
+      <span data-i18n="nav.add">Ajouter</span>
     </a>
     <button type="button" class="bottom-nav-account" data-auth-open="login">
       <span class="avatar avatar-sm" data-auth-avatar aria-hidden="true">?</span>
-      <span>Compte</span>
+      <span data-i18n="nav.account">Compte</span>
     </button>
   </nav>
 
@@ -208,14 +223,78 @@
         </a>
 
         <div class="auth-tabs" role="tablist" aria-label="Connexion ou inscription">
-          <button type="button" role="tab" id="tab-login" aria-controls="auth-view" aria-selected="true" data-auth-tab="login">Connexion</button>
-          <button type="button" role="tab" id="tab-register" aria-controls="auth-view" aria-selected="false" data-auth-tab="register">Créer un compte</button>
+          <button type="button" role="tab" id="tab-login" aria-controls="auth-view" aria-selected="true" data-auth-tab="login" data-i18n="auth.tab.login">Connexion</button>
+          <button type="button" role="tab" id="tab-register" aria-controls="auth-view" aria-selected="false" data-auth-tab="register" data-i18n="auth.tab.signup">Créer un compte</button>
         </div>
 
         <div class="auth-view" id="auth-view" role="tabpanel" aria-labelledby="tab-login" data-auth-view></div>
       </div>
     </div>
   </div>
+
+
+  <!-- ===================== Paramètres ===================== -->
+  <div class="auth-modal settings-modal" id="settings-modal" hidden>
+    <div class="auth-backdrop" data-settings-close></div>
+    <div class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1">
+      <button type="button" class="auth-close" data-settings-close aria-label="Fermer les paramètres">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+      </button>
+
+      <header class="settings-head">
+        <span class="settings-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z" /></svg>
+        </span>
+        <div>
+          <h2 id="settings-title" data-i18n="settings.title">Paramètres</h2>
+          <p data-i18n="settings.sub">Langue, économie de données et apparence.</p>
+        </div>
+      </header>
+
+      <section class="settings-group" aria-labelledby="set-lang-title">
+        <h3 id="set-lang-title" data-i18n="settings.language">Langue de l’interface</h3>
+        <div class="segmented" role="radiogroup" aria-labelledby="set-lang-title">
+          <button type="button" role="radio" data-set-lang="fr" aria-checked="true">Français</button>
+          <button type="button" role="radio" data-set-lang="bm" aria-checked="false">Bamanankan</button>
+        </div>
+        <p class="settings-hint" data-i18n="settings.languageHint">Les fiches restent dans la langue de leurs auteurs.</p>
+        <p class="settings-note" data-i18n="settings.language.experimental">Bambara (version expérimentale)</p>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-data-title">
+        <h3 id="set-data-title" data-i18n="settings.data">Économiseur de données</h3>
+        <div class="segmented" role="radiogroup" aria-labelledby="set-data-title">
+          <button type="button" role="radio" data-set-datasaver="auto" aria-checked="true" data-i18n="settings.data.auto">Automatique</button>
+          <button type="button" role="radio" data-set-datasaver="on" aria-checked="false" data-i18n="settings.data.on">Activé</button>
+          <button type="button" role="radio" data-set-datasaver="off" aria-checked="false" data-i18n="settings.data.off">Désactivé</button>
+        </div>
+        <p class="settings-hint" data-i18n="settings.data.hint">Images allégées, chargement différé et photos d’avis compressées.</p>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-images-title">
+        <h3 id="set-images-title" data-i18n="settings.images">Images</h3>
+        <div class="segmented" role="radiogroup" aria-labelledby="set-images-title">
+          <button type="button" role="radio" data-set-images="normal" aria-checked="true" data-i18n="settings.images.normal">Normales</button>
+          <button type="button" role="radio" data-set-images="none" aria-checked="false" data-i18n="settings.images.none">Sans images</button>
+        </div>
+        <p class="settings-hint" data-i18n="settings.images.noneHint">L’interface reste lisible, les photos sont remplacées par des pictogrammes.</p>
+      </section>
+
+      <section class="settings-group" aria-labelledby="set-theme-title">
+        <h3 id="set-theme-title" data-i18n="settings.theme">Apparence</h3>
+        <div class="segmented" role="radiogroup" aria-labelledby="set-theme-title">
+          <button type="button" role="radio" data-set-theme="auto" aria-checked="false" data-i18n="settings.theme.auto">Automatique</button>
+          <button type="button" role="radio" data-set-theme="light" aria-checked="true" data-i18n="settings.theme.light">Clair</button>
+          <button type="button" role="radio" data-set-theme="dark" aria-checked="false" data-i18n="settings.theme.dark">Sombre</button>
+        </div>
+      </section>
+
+      <p class="settings-foot" data-i18n="settings.installHint">Ajoutez l’application à votre écran d’accueil depuis le menu du navigateur.</p>
+    </div>
+  </div>
+
+  <!-- Affiche vitrine imprimable (remplie à la demande) -->
+  <div id="print-root" aria-hidden="true"></div>
 
   <!-- Notifications -->
   <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
@@ -229,6 +308,8 @@
   <script src="assets/vendor/leaflet/leaflet.js"></script>
   <script src="assets/vendor/leaflet/leaflet.markercluster.js"></script>
   <script src="data.js"></script>
+  <script src="translations.js"></script>
+  <script src="assets/vendor/qrcode/qrcode.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

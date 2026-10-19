@@ -34,9 +34,12 @@ const CATEGORIES = [
   {
     id: 'restaurants',
     label: 'Restaurants',
+    labelBm: 'Dumunikɛyɔrɔw',
     singular: 'Restaurant',
     color: '#ea580c',
     tagline: 'Tables locales & saveurs du monde',
+    photo: 'assets/photos/restaurants.webp',
+    photoSmall: 'assets/photos/restaurants-sm.webp',
     icon: `
       <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2"/>
       <path d="M7 2v20"/>
@@ -79,9 +82,12 @@ const CATEGORIES = [
   {
     id: 'hotels',
     label: 'Hôtels',
+    labelBm: 'Otɛliw',
     singular: 'Hôtel',
     color: '#4f46e5',
     tagline: 'Dormir bien, au cœur de Bamako',
+    photo: 'assets/photos/hotels.webp',
+    photoSmall: 'assets/photos/hotels-sm.webp',
     icon: `
       <path d="M2 20v-8a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v8"/>
       <path d="M4 10V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v4"/>
@@ -122,9 +128,12 @@ const CATEGORIES = [
   {
     id: 'pharmacies',
     label: 'Pharmacies',
+    labelBm: 'Farmasiw',
     singular: 'Pharmacie',
     color: '#059669',
     tagline: 'Soins, garde et conseils de proximité',
+    photo: 'assets/photos/pharmacies.webp',
+    photoSmall: 'assets/photos/pharmacies-sm.webp',
     icon: `
       <path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/>
       <path d="m8.5 8.5 7 7"/>
@@ -155,9 +164,12 @@ const CATEGORIES = [
   {
     id: 'boutiques',
     label: 'Boutiques',
+    labelBm: 'Butikiw',
     singular: 'Boutique',
     color: '#db2777',
     tagline: 'Tissus, épicerie et artisanat',
+    photo: 'assets/photos/boutiques.webp',
+    photoSmall: 'assets/photos/boutiques-sm.webp',
     icon: `
       <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/>
       <path d="M3 6h18"/>
@@ -194,9 +206,12 @@ const CATEGORIES = [
   {
     id: 'salons',
     label: 'Coiffure & beauté',
+    labelBm: 'Sɛlɔnw',
     singular: 'Salon',
     color: '#c026d3',
     tagline: 'Coiffure, soins et bien-être',
+    photo: 'assets/photos/salons.webp',
+    photoSmall: 'assets/photos/salons-sm.webp',
     icon: `
       <circle cx="6" cy="6" r="3"/>
       <path d="M8.12 8.12 12 12"/>
@@ -235,9 +250,12 @@ const CATEGORIES = [
   {
     id: 'garages',
     label: 'Garages',
+    labelBm: 'Garajiw',
     singular: 'Garage',
     color: '#0284c7',
     tagline: 'Réparer, entretenir, repartir',
+    photo: 'assets/photos/garages.webp',
+    photoSmall: 'assets/photos/garages-sm.webp',
     icon: `
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
     `,
@@ -272,9 +290,12 @@ const CATEGORIES = [
   {
     id: 'ecoles',
     label: 'Écoles',
+    labelBm: 'Lakɔliw',
     singular: 'École',
     color: '#0d9488',
     tagline: 'Apprendre et grandir à Bamako',
+    photo: 'assets/photos/ecoles.webp',
+    photoSmall: 'assets/photos/ecoles-sm.webp',
     icon: `
       <path d="M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z"/>
       <path d="M22 10v6"/>
@@ -312,9 +333,12 @@ const CATEGORIES = [
   {
     id: 'services',
     label: 'Services',
+    labelBm: 'Baarakɛlaw',
     singular: 'Service',
     color: '#475569',
     tagline: 'Plombiers, électriciens et artisans fiables',
+    photo: 'assets/photos/services.webp',
+    photoSmall: 'assets/photos/services-sm.webp',
     icon: `
       <path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9"/>
       <path d="m18 15 4-4"/>
@@ -351,9 +375,12 @@ const CATEGORIES = [
   {
     id: 'evenements',
     label: 'Événements',
+    labelBm: 'Fɛtiw',
     singular: 'Événement',
     color: '#b45309',
     tagline: 'Salles, traiteurs et grands jours',
+    photo: 'assets/photos/evenements.webp',
+    photoSmall: 'assets/photos/evenements-sm.webp',
     icon: `
       <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/>
       <path d="M13 5v2"/>
@@ -597,6 +624,53 @@ const LISTINGS = [
       openingHours: 'Lun – Dim · 8h – 23h · Garde',
       pharmacyServices:
         'Garde de nuit\nVaccins\nParapharmacie\nSoins infirmiers de base',
+    },
+  },
+  {
+    id: 'pharmacie-kalaban',
+    name: 'Pharmacie Kalaban Coura',
+    category: 'pharmacies',
+    subcategories: ['Pharmacie de quartier', 'Parapharmacie'],
+    neighborhood: 'Kalaban Coura',
+    address: 'Kalaban Coura ACI, Rue 340, Bamako',
+    landmark: 'Face au marché de Kalaban Coura ACI',
+    phone: '+223 66 78 12 34',
+    whatsapp: '22366781234',
+    hours: 'Lun – Dim · 8h – 22h · Garde 22h – 7h',
+    description:
+      'Officine de quartier ouverte tard, appréciée pour sa garde de nuit et ses conseils en pédiatrie. Livraison à domicile dans le quartier.',
+    rating: 4.8,
+    reviews: 41,
+    createdAt: '2026-10-10',
+    coords: [12.5972, -8.0331],
+    fields: {
+      onDuty: true,
+      openingHours: 'Lun – Dim · 8h – 22h · Garde de nuit 22h – 7h',
+      pharmacyServices:
+        'Garde de nuit\nVaccination\nConseils pédiatriques\nLivraison à domicile',
+    },
+  },
+  {
+    id: 'pharmacie-magnambougou',
+    name: 'Pharmacie du Marché de Magnambougou',
+    category: 'pharmacies',
+    subcategories: ['Pharmacie de quartier'],
+    neighborhood: 'Magnambougou',
+    address: 'Magnambougou, près du marché central',
+    landmark: 'À l’entrée du marché de Magnambougou',
+    phone: '+223 75 90 11 22',
+    hours: 'Lun – Sam · 7h30 – 21h · Dim 9h – 13h',
+    description:
+      'La pharmacie du marché, pratique et rapide, avec un rayon parapharmacie et des produits de premiers soins pour la famille.',
+    rating: 4.2,
+    reviews: 33,
+    createdAt: '2026-08-12',
+    coords: [12.6865, -7.9385],
+    fields: {
+      onDuty: false,
+      openingHours: 'Lun – Sam · 7h30 – 21h · Dim 9h – 13h',
+      pharmacyServices:
+        'Médicaments génériques\nPremiers soins\nParapharmacie',
     },
   },
   {
@@ -880,5 +954,186 @@ const LISTINGS = [
   },
 ];
 
+
+/* ==========================================================================
+   AVIS DE DÉMONSTRATION
+   --------------------------------------------------------------------------
+   Chaque avis porte une note, un texte, une date, un indicateur « vérifié »
+   et, parfois, une photo. Les avis publiés depuis l'application sont stockés
+   dans localStorage et fusionnés avec ceux-ci.
+   ========================================================================== */
+const REVIEWS = {
+  'le-baobab': [
+    {
+      id: 'seed-baobab-1', author: 'Fatoumata D.', rating: 5, date: '2026-10-16',
+      text: 'Le riz au gras est généreux et le service très chaleureux. La terrasse est parfaite en fin de journée.',
+      verified: true, photo: 'assets/photos/restaurants.webp', helpful: 18,
+    },
+    {
+      id: 'seed-baobab-2', author: 'Moussa K.', rating: 5, date: '2026-10-09',
+      text: 'Dumuni ɲuman ! Riz au gras ni jɛgɛ bɛ di. N bɛ segin yen.',
+      verified: true, photo: null, helpful: 11, lang: 'bm',
+    },
+    {
+      id: 'seed-baobab-3', author: 'Aminata S.', rating: 4, date: '2026-09-28',
+      text: 'On y va en famille chaque dimanche. Rapport qualité-prix imbattable à Hamdallaye.',
+      verified: true, photo: null, helpful: 7,
+    },
+  ],
+  'faso-grill': [
+    {
+      id: 'seed-faso-1', author: 'Ibrahim T.', rating: 5, date: '2026-10-12',
+      text: 'Brochettes parfaitement grillées, alloco croustillant. Un peu d’attente à midi, mais ça vaut le coup.',
+      verified: true, photo: null, helpful: 14,
+    },
+    {
+      id: 'seed-faso-2', author: 'Awa C.', rating: 4, date: '2026-10-02',
+      text: 'Bon grill, ambiance simple et sympa. Pensez à venir avant 13h le vendredi.',
+      verified: false, photo: null, helpful: 4,
+    },
+  ],
+  'capitaine-bleu': [
+    {
+      id: 'seed-capitaine-1', author: 'Oumar D.', rating: 5, date: '2026-10-11',
+      text: 'Le capitaine braisé est excellent, avec la vue sur le fleuve au coucher du soleil.',
+      verified: true, photo: 'assets/photos/restaurants.webp', helpful: 21,
+    },
+    {
+      id: 'seed-capitaine-2', author: 'Mariam K.', rating: 4, date: '2026-09-20',
+      text: 'Poisson frais et copieux. Le cadre est simple mais l’accueil est adorable.',
+      verified: true, photo: null, helpful: 6,
+    },
+  ],
+  'hotel-teriya': [
+    {
+      id: 'seed-teriya-1', author: 'Sophie L.', rating: 5, date: '2026-10-14',
+      text: 'Chambre propre, cour calme et personnel aux petits soins. Le petit-déjeuner est copieux.',
+      verified: true, photo: 'assets/photos/hotels.webp', helpful: 19,
+    },
+    {
+      id: 'seed-teriya-2', author: 'Jean-Paul M.', rating: 4, date: '2026-09-30',
+      text: 'Très bon rapport qualité-prix pour ACI 2000. La piscine est agréable en fin de journée.',
+      verified: true, photo: null, helpful: 8,
+    },
+  ],
+  'pharmacie-de-la-paix': [
+    {
+      id: 'seed-paix-1', author: 'Drissa K.', rating: 5, date: '2026-10-13',
+      text: 'Pharmacie bien tenue, personnel compétent. J’ai trouvé mon traitement tout de suite.',
+      verified: true, photo: null, helpful: 13,
+    },
+    {
+      id: 'seed-paix-2', author: 'Aïssata B.', rating: 4, date: '2026-10-01',
+      text: 'Ouverte tard, ce qui est précieux. Accueil patient et conseils utiles.',
+      verified: true, photo: null, helpful: 5,
+    },
+  ],
+  'salon-djeneba': [
+    {
+      id: 'seed-djeneba-1', author: 'Kadidia S.', rating: 5, date: '2026-10-15',
+      text: 'Tresses impeccables et tenue dans le temps. Djeneba prend le temps de conseiller.',
+      verified: true, photo: 'assets/photos/salons.webp', helpful: 16,
+    },
+    {
+      id: 'seed-djeneba-2', author: 'Fatou D.', rating: 5, date: '2026-09-25',
+      text: 'Salon propre, ambiance agréable. Je recommande pour les tresses et les soins.',
+      verified: true, photo: null, helpful: 9,
+    },
+  ],
+  'boutique-diarra': [
+    {
+      id: 'seed-diarra-1', author: 'Rokia T.', rating: 5, date: '2026-10-04',
+      text: 'Beaux tissus wax et prix raisonnables. La patronne conseille très bien.',
+      verified: true, photo: 'assets/photos/boutiques.webp', helpful: 12,
+    },
+  ],
+  'garage-auto-plus': [
+    {
+      id: 'seed-garage-1', author: 'Bakary T.', rating: 4, date: '2026-10-10',
+      text: 'Vidange rapide et honnête, prix annoncé respecté. Je reviendrai pour la révision.',
+      verified: true, photo: null, helpful: 7,
+    },
+  ],
+  'plomberie-konate': [
+    {
+      id: 'seed-plomberie-1', author: 'Souleymane C.', rating: 5, date: '2026-10-08',
+      text: 'Intervention rapide pour une fuite, travail propre et devis clair.',
+      verified: true, photo: null, helpful: 10,
+    },
+  ],
+  'ecole-les-etoiles': [
+    {
+      id: 'seed-ecole-1', author: 'Nana D.', rating: 5, date: '2026-10-05',
+      text: 'Équipe pédagogique attentive, mes enfants s’y plaisent. Les locaux sont bien entretenus.',
+      verified: true, photo: 'assets/photos/ecoles.webp', helpful: 8,
+    },
+  ],
+  'traiteur-awa': [
+    {
+      id: 'seed-traiteur-1', author: 'Fanta K.', rating: 5, date: '2026-09-29',
+      text: 'Buffet magnifique pour le mariage de ma sœur, tout était délicieux et le service impeccable.',
+      verified: true, photo: 'assets/photos/evenements.webp', helpful: 15,
+    },
+  ],
+};
+
+/* ==========================================================================
+   PROMOTIONS & OFFRES DU JOUR (démonstration)
+   --------------------------------------------------------------------------
+   `PROMOS` alimente les coupons à présenter sur place ; `DAILY_OFFERS` alimente
+   la section « Aujourd’hui à Bamako ». Les offres publiées par un commerçant
+   depuis l’application sont stockées dans localStorage et prennent le dessus.
+   ========================================================================== */
+const PROMOS = {
+  'le-baobab': {
+    code: 'BAOBAB10', title: '-10 % sur le plat du jour',
+    detail: 'Sur place, du lundi au jeudi, hors boissons.',
+    expires: '2026-12-31',
+  },
+  'faso-grill': {
+    code: 'GRILL15', title: '-15 % sur les grillades',
+    detail: 'Le midi en semaine, sur présentation du coupon.',
+    expires: '2026-11-30',
+  },
+  'hotel-teriya': {
+    code: 'TERIYA15', title: '-15 % sur la nuitée',
+    detail: 'En réservation directe, hors week-end et jours fériés.',
+    expires: '2026-12-31',
+  },
+  'salon-djeneba': {
+    code: 'DJENEBA20', title: '-20 % sur les tresses',
+    detail: 'Sur rendez-vous, pour une première visite.',
+    expires: '2026-12-15',
+  },
+  'pharmacie-de-la-paix': {
+    code: 'SANTE5', title: '-5 % en parapharmacie',
+    detail: 'Hors médicaments, sur présentation du coupon.',
+    expires: '2026-12-31',
+  },
+  'garage-auto-plus': {
+    code: 'AUTO10', title: '-10 % sur la vidange',
+    detail: 'Sur présentation du coupon, véhicules légers.',
+    expires: '2026-11-15',
+  },
+};
+
+const DAILY_OFFERS = {
+  'le-baobab': {
+    title: 'Riz au gras au poulet', price: 2500,
+    description: 'Servi avec salade fraîche et boisson locale.',
+    photo: 'assets/photos/plat-riz.webp',
+  },
+  'faso-grill': {
+    title: 'Brochettes de bœuf + alloco', price: 3000,
+    description: 'Cinq brochettes grillées au feu de bois, alloco croustillant.',
+    photo: 'assets/photos/restaurants.webp',
+  },
+  'capitaine-bleu': {
+    title: 'Capitaine braisé entier', price: 6000,
+    description: 'Poisson du fleuve, attiéké et sauce tomate maison.',
+    photo: 'assets/photos/restaurants.webp',
+  },
+};
+
 // Exposé globalement pour les scripts classiques (sans module).
-window.BamaHubData = { CATEGORIES, NEIGHBORHOODS, LISTINGS };
+window.BamaHubData = { CATEGORIES, NEIGHBORHOODS, LISTINGS, REVIEWS, PROMOS, DAILY_OFFERS };

@@ -14,6 +14,7 @@ dans un navigateur, une identité de marque vectorisée et un manifeste PWA.
 
 - [Lancer le projet](#lancer-le-projet)
 - [Fonctionnalités](#fonctionnalités)
+- [Nouveautés v2](#nouveautés-v2)
 - [Cartes & géolocalisation](#cartes--géolocalisation)
 - [Identité visuelle & logo](#identité-visuelle--logo)
 - [Connexion & inscription](#connexion--inscription)
@@ -76,6 +77,73 @@ Détails d’expérience :
 
 ---
 
+
+---
+
+## Nouveautés v2
+
+Quatorze fonctions ont été ajoutées sans framework ni étape de build. Le cœur
+reste les quatre fichiers (`index.html`, `style.css`, `app.js`, `data.js`) ; la
+traduction est isolée dans `translations.js` et les bibliothèques tierces sont
+auto-hébergées.
+
+| Fonction | Où / comment l’essayer |
+| --- | --- |
+| **1. Bilingue français / bambara** | Bouton globe dans l’en-tête et la fenêtre Réglages. Le choix est mémorisé (`bamahub:lang`) et s’applique à l’interface, aux filtres, aux fiches et aux messages. |
+| **2. « Ouvert » / « Ferme bientôt »** | Badge calculé depuis `hours` (60 min de préavis), filtre rapide `quick=open`, recalcul automatique chaque minute. |
+| **3. WhatsApp pré-rempli** | Bouton sur chaque fiche (« Commander » pour un restaurant, « Réserver » pour un hôtel) avec message contenant le nom, la catégorie et le quartier. Repli sur `listing.phone` si `whatsapp` est absent. |
+| **4. Pharmacies de garde** | Filtre rapide `quick=duty` + bandeau d’appel en haut de l’explorateur. Piloté par le champ booléen `onDuty` de la catégorie Pharmacies. |
+| **5. Économiseur de données** | Réglages → « Économiseur de données » (`auto` / `on` / `off`). En mode actif, les cartes chargent les variantes `-sm.webp`, `loading="lazy"` et le réglage « sans images » les remplace par un visuel de catégorie. |
+| **6. Recherche vocale** | Micro dans la recherche d’accueil et l’explorateur (Web Speech API, `fr-FR`). Repli sur la saisie clavier avec un message si le navigateur ne la supporte pas. |
+| **7. Plat / offre du jour** | Depuis une fiche restaurant, publication d’un plat du jour (nom + prix + photo). La carte apparaît sur l’accueil, datée du jour, et se réinitialise le lendemain. |
+| **8. Promos & coupons** | Bandeau promo sur la fiche, code copiable et **QR code** à présenter en caisse. Les promos publiées localement complètent celles de `data.js`. |
+| **9. Avis** | Note 1–5, texte, photo optionnelle, mention « Avis vérifié » (compte connecté), vote utile, signalement avec motif. Les avis locaux sont fusionnés avec ceux de `data.js`. |
+| **10. Indice de confiance** | Score 0–100 : complétude de la fiche (45), qualité et volume des avis (35), ancienneté (20). Affiché sur les cartes et les fiches. |
+| **11. Comparateur** | Jusqu’à 3 adresses via le bouton « Comparer » des cartes, puis `#/comparer?ids=a,b,c`. Tableau aligné ligne par ligne, meilleure valeur surlignée. |
+| **12. QR par adresse + affiche** | Bouton « QR / affiche » sur la fiche : feuille imprimable (`#print-root`) avec le QR, le nom, l’adresse, le téléphone et le coupon éventuel. `window.print()` puis nettoyage automatique. |
+| **13. Page de partage** | `partage/<slug>.html` : page statique avec `og:title`, `og:description`, `og:image` absolue, WhatsApp et redirection vers `index.html#/adresse/<slug>` après 1,4 s. À régénérer si les fiches changent (voir plus bas). |
+| **14. Suggestions** | Les recherches et fiches consultées alimentent un historique local (cap 40). L’accueil et l’explorateur proposent des requêtes et des adresses proches de cet historique. |
+
+### Fichiers ajoutés
+
+```
+translations.js               Dictionnaires FR / BM + t(), tData(), apply(),
+                              setLang() — expose window.BamaHubI18n
+assets/vendor/qrcode/         qrcode-generator 2.0.4 (MIT), auto-hébergé
+assets/photos/                18 visuels WebP (960×640 et variantes -sm)
+partage/                      22 pages Open Graph, une par adresse
+```
+
+`index.html` charge, dans l’ordre : Leaflet (+ markercluster), `data.js`,
+`translations.js`, `qrcode.js`, puis `app.js`. Aucun autre script n’est
+nécessaire et aucune étape de compilation n’est requise.
+
+### Stockage local v2
+
+Tout reste dans le navigateur, sans serveur ni compte distant :
+
+| Clé | Contenu |
+| --- | --- |
+| `bamahub:lang` | `fr` ou `bm` |
+| `bamahub:reviews` | avis publiés localement, par adresse |
+| `bamahub:reports` | signalements d’avis |
+| `bamahub:promos` | coupons publiés localement |
+| `bamahub:daily-offers` | plats du jour publiés |
+| `bamahub:history` | historique de recherche et de consultation |
+| `bamahub:compare` | ids du comparateur (3 maximum) |
+| `bamahub:datasaver` / `bamahub:images` | préférences d’images |
+
+Pour repartir de zéro : `localStorage.clear()` dans la console, puis recharger.
+Le compte de démonstration (`demo@bamahub.ml` / `bamako2026`) reste disponible.
+
+### Régénérer les pages de partage
+
+Les fichiers de `partage/` sont statiques (les robots sociaux n’exécutent pas
+JavaScript). Après une modification des fiches, les régénérer avec le script
+`tools/build-share-pages.js` — ou adapter à la main `og:title`,
+`og:description`, `og:image` et l’URL de redirection.
+
+---
 ## Cartes & géolocalisation
 
 La carte repose sur **Leaflet 1.9.4** et **Leaflet.markercluster 1.5.3**,
@@ -252,19 +320,27 @@ index.html          Coquille HTML : en-tête, splash, sprite du logo, pied de pa
 style.css           Design system complet (variables, composants, thème sombre,
                     responsive, section « Identité de marque »)
 app.js              Application : état, rendu, routage, filtres, favoris, formulaire,
-                    session et écran de démarrage
-data.js             CONFIG des catégories + 20 adresses de démonstration
+                    session, carte, avis, comparateur, QR et écran de démarrage
+translations.js     Dictionnaires français / bambara et helpers i18n
+data.js             CONFIG des catégories + 22 adresses de démonstration
 manifest.json       Manifeste PWA (icônes, couleurs, raccourcis)
 favicon.ico         Favicon multi-tailles (16, 32, 48)
 assets/logo/        Logo vectorisé et déclinaisons (voir ci-dessous)
 assets/vendor/leaflet/
                     Leaflet 1.9.4 + markercluster 1.5.3 auto-hébergés
                     (JS, CSS, images et licences)
+assets/vendor/qrcode/
+                    qrcode-generator 2.0.4 (MIT) auto-hébergé
+assets/photos/      Visuels WebP des catégories et du plat du jour
+partage/            Pages Open Graph statiques (22 adresses)
+tools/              Script de régénération des pages de partage
 ```
 
-Soit **quatre fichiers de code** (`index.html`, `style.css`, `app.js`, `data.js`)
-plus les ressources de marque (`manifest.json`, `favicon.ico`, `assets/logo/`) et
-la bibliothèque de cartes auto-hébergée (`assets/vendor/leaflet/`).
+Soit **cinq fichiers de code** (`index.html`, `style.css`, `app.js`, `data.js`,
+`translations.js`) plus les ressources de marque (`manifest.json`,
+`favicon.ico`, `assets/logo/`), les bibliothèques auto-hébergées
+(`assets/vendor/leaflet/`, `assets/vendor/qrcode/`), les visuels
+(`assets/photos/`) et les pages de partage (`partage/`).
 
 Répartition volontairement nette :
 
@@ -272,6 +348,11 @@ Répartition volontairement nette :
   données, exposées via `window.BamaHubData`.
 - `app.js` ne contient **aucune** donnée métier : tout est dérivé de la config.
 - `style.css` pilote l’apparence via des variables CSS (`--brand`, `--cat`, etc.).
+- `translations.js` ne contient que du texte et quelques fonctions : `t()`,
+  `tData()`, `apply()` et `setLang()`. Ajouter une langue revient à ajouter un
+  dictionnaire et à le déclarer dans `LANGS`.
+- `tools/` ne sert qu’au développement : l’application elle-même n’en dépend
+  pas et continue de fonctionner en ouvrant `index.html`.
 
 ---
 
@@ -414,7 +495,7 @@ booléen correspondant (`onDuty`, `delivery`, `urgent`, `enrollmentOpen`,
 
 ## Données de démonstration
 
-`data.js` contient **20 adresses fictives réalistes** réparties dans six
+`data.js` contient **22 adresses fictives réalistes** réparties dans six
 quartiers de Bamako — Hamdallaye, ACI 2000, Badalabougou, Kalaban Coura,
 Magnambougou, Quartier du fleuve — avec des prix en FCFA, des numéros au format
 malien (`+223 …`), un **repère** et des coordonnées approximatives utilisées par

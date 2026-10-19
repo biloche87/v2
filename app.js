@@ -30,7 +30,7 @@
     return;
   }
 
-  const { CATEGORIES, NEIGHBORHOODS, LISTINGS } = DATA;
+  const { CATEGORIES, NEIGHBORHOODS, LISTINGS, REVIEWS = {}, PROMOS = {}, DAILY_OFFERS = {} } = DATA;
 
   const STORAGE = {
     favorites: 'bamahub:favorites',
@@ -39,6 +39,15 @@
     lastExplorer: 'bamahub:last-explorer',
     accounts: 'bamahub:accounts',
     session: 'bamahub:session',
+    // Nouvelles fonctionnalités (v2)
+    reviews: 'bamahub:reviews',
+    reports: 'bamahub:reports',
+    offers: 'bamahub:daily-offers',
+    promos: 'bamahub:promos',
+    history: 'bamahub:history',
+    compare: 'bamahub:compare',
+    dataSaver: 'bamahub:datasaver',
+    images: 'bamahub:images',
   };
 
   const DEMO_ACCOUNT = {
@@ -54,7 +63,21 @@
     { id: 'recent', label: 'Plus récents' },
     { id: 'prix-asc', label: 'Prix croissant' },
     { id: 'prix-desc', label: 'Prix décroissant' },
+    { id: 'confiance', label: 'Indice de confiance' },
   ];
+
+  /** Libellé de tri dans la langue active (repli sur le libellé français). */
+  const sortLabel = (option) => {
+    const value = t(`sort.${option.id}`);
+    return value === `sort.${option.id}` ? option.label : value;
+  };
+
+  /** Libellé de filtre rapide dans la langue active. */
+  const quickLabel = (filter) => {
+    const key = `quick.${filter.id}`;
+    const value = t(key);
+    return value === key ? filter.label : value;
+  };
 
   /** Centre de Bamako utilisé par la carte et le formulaire. */
   const BAMAKO_CENTER = [12.6392, -8.0029];
@@ -75,6 +98,7 @@
 
   /** Filtres rapides génériques, branchés sur les champs booléens du config. */
   const QUICK_FILTERS = [
+    { id: 'open', label: 'Ouvert maintenant', test: (listing) => isOpenNow(listing) },
     { id: 'duty', label: 'De garde', test: (l) => l.fields?.onDuty === true },
     { id: 'reservation', label: 'Réservation', test: (l) => l.fields?.reservation === true },
     { id: 'delivery', label: 'Livraison', test: (l) => l.fields?.delivery === true },
@@ -85,6 +109,7 @@
     },
     { id: 'enrollment', label: 'Inscriptions ouvertes', test: (l) => l.fields?.enrollmentOpen === true },
     { id: 'home', label: 'À domicile', test: (l) => l.fields?.homeService === true },
+    { id: 'promo', label: 'En promotion', test: (listing) => Boolean(promoFor(listing.id)) },
   ];
 
   const FALLBACK_CATEGORY = {
@@ -147,6 +172,486 @@
       .replace(/^-+|-+$/g, '')
       .slice(0, 50) || 'adresse';
 
+  /* ==========================================================================
+     2bis. Services transverses
+     --------------------------------------------------------------------------
+     Langue, horaires d'ouverture, indice de confiance, avis, préférences
+     d'affichage, offres et promotions. Ces fonctions sont volontairement
+     sans état global en dehors de `state`, ce qui les rend faciles à tester.
+     ========================================================================== */
+
+  /** Raccourci de traduction (le dictionnaire vit dans translations.js). */
+  const t = (key, vars) => (window.BamaHubI18n ? window.BamaHubI18n.t(key, vars) : key);
+  const getLang = () => (window.BamaHubI18n ? window.BamaHubI18n.getLang() : 'fr');
+
+  /** Libellé de catégorie dans la langue active. */
+  const catLabel = (cat) =>
+    getLang() === 'bm' && cat?.labelBm ? cat.labelBm : cat?.label || '';
+
+  /* ----------------------------- Horaires -------------------------------- */
+
+  const DAY_INDEX = { dim: 0, lun: 1, mar: 2, mer: 3, jeu: 4, ven: 5, sam: 6 };
+  const ALL_DAYS = [1, 2, 3, 4, 5, 6, 0];
+  const HOURS_CACHE = new Map();
+
+  /** « 8h », « 8h30 », « 00h » — utilisé dans les statuts d'ouverture. */
+  function formatClock(minutes) {
+    const total = ((Math.round(minutes) % 1440) + 1440) % 1440;
+    const hours = Math.floor(total / 60);
+    const mins = total % 60;
+    if (total === 0) return '00h';
+    return `${hours}h${mins ? String(mins).padStart(2, '0') : ''}`;
+  }
+
+  /** Analyse « 8h – 22h », « 7h30 – 17h », « 22h – 7h » (nuit). */
+  function parseTimeRange(text) {
+    const match = /(\d{1,2})\s*(?:h|:)\s*(\d{2})?\s*(?:-|à|a)\s*(\d{1,2})\s*(?:h|:)\s*(\d{2})?/.exec(text);
+    if (!match) return null;
+    const startHours = Number(match[1]);
+    const startMins = match[2] ? Number(match[2]) : 0;
+    const endHours = Number(match[3]);
+    const endMins = match[4] ? Number(match[4]) : 0;
+    if (startHours > 24 || endHours > 24 || startMins > 59 || endMins > 59) return null;
+    const start = startHours * 60 + startMins;
+    let end = endHours === 24 ? 1440 + endMins : endHours * 60 + endMins;
+    // Une plage qui se termine avant de commencer passe minuit.
+    if (end <= start) end += 1440;
+    return { start, end };
+  }
+
+  /**
+   * Repère la portion « jours » d'un segment d'horaires.
+   * « Lun - Sam » → 6 jours ; « Sam 9h - 13h » → samedi + reste « 9h - 13h ».
+   */
+  function parseDaySpec(part) {
+    if (/(tous les jours|7\s*j\s*\/\s*7|7\s*\/\s*7)/i.test(part)) {
+      const rest = part.replace(/(tous les jours|7\s*j\s*\/\s*7|7\s*\/\s*7)/gi, '').replace(/^[\s·,]+/, '').trim();
+      return { days: ALL_DAYS.slice(), rest };
+    }
+    const dayRe = /\b(lun(?:di)?|mar(?:di)?|mer(?:credi)?|jeu(?:di)?|ven(?:dredi)?|sam(?:edi)?|dim(?:anche)?)\b/gi;
+    const found = [];
+    let match;
+    while ((match = dayRe.exec(part))) {
+      const day = DAY_INDEX[match[1].toLowerCase().slice(0, 3)];
+      if (day === undefined) continue;
+      found.push({ day, start: match.index, end: match.index + match[0].length });
+    }
+    if (!found.length) return null;
+
+    const days = new Set();
+    if (found.length >= 2 && /^\s*[-–—]\s*$/.test(part.slice(found[0].end, found[1].start))) {
+      let day = found[0].day;
+      for (let i = 0; i < 7; i += 1) {
+        days.add(day);
+        if (day === found[1].day) break;
+        day = (day + 1) % 7;
+      }
+    } else {
+      days.add(found[0].day);
+      for (let i = 1; i < found.length; i += 1) {
+        if (/^\s*[,/]\s*$/.test(part.slice(found[i - 1].end, found[i].start))) days.add(found[i].day);
+      }
+    }
+
+    const rest = part.slice(found[found.length - 1].end).trim().replace(/^[,·]\s*/, '');
+    return { days: [...days], rest };
+  }
+
+  /**
+   * Transforme une chaîne d'horaires libre en plages par jour.
+   * Format de retour : { always, known, days: [[{start,end}], …] } (0 = dimanche).
+   */
+  function parseHours(raw) {
+    const key = String(raw || '');
+    if (HOURS_CACHE.has(key)) return HOURS_CACHE.get(key);
+
+    const days = Array.from({ length: 7 }, () => []);
+    const result = { always: false, known: false, days };
+    if (!raw || typeof raw !== 'string') {
+      HOURS_CACHE.set(key, result);
+      return result;
+    }
+
+    const text = raw
+      .replace(/[–—−]/g, '-')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Réception / urgences 24h/24 : l'adresse est joignable à toute heure.
+    if (/(réception|urgences?|accueil)[^·]*24\s*h?\s*\/\s*24/i.test(text)) {
+      result.always = true;
+      result.known = true;
+      HOURS_CACHE.set(key, result);
+      return result;
+    }
+
+    const parts = text.split('·').map((part) => part.trim()).filter(Boolean);
+    if (parts.some((part) => /^24\s*h?\s*\/\s*24\s*h?$/i.test(part))) {
+      result.always = true;
+      result.known = true;
+      HOURS_CACHE.set(key, result);
+      return result;
+    }
+
+    let currentDays = ALL_DAYS.slice();
+    let known = false;
+    for (const part of parts) {
+      const spec = parseDaySpec(part);
+      if (spec) currentDays = spec.days;
+      const range = parseTimeRange(spec ? spec.rest : part);
+      if (!range) continue;
+      currentDays.forEach((day) => {
+        if (spec) {
+          // Un jour explicitement nommé remplace les plages héritées.
+          days[day] = [{ start: range.start, end: range.end }];
+        } else {
+          days[day] = [...days[day], { start: range.start, end: range.end }];
+        }
+      });
+      known = true;
+    }
+
+    result.known = known;
+    HOURS_CACHE.set(key, result);
+    return result;
+  }
+
+  const dayName = (index) => {
+    if (getLang() === 'bm') {
+      return ['kari', 'ntɛnɛn', 'tarata', 'araba', 'alamisa', 'juma', 'sibiri'][index];
+    }
+    return ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'][index];
+  };
+
+  /**
+   * Statut d'ouverture à l'instant `now`.
+   * → { status: 'open' | 'soon' | 'closed' | 'unknown', label, detail }
+   */
+  function getOpenState(listing, now = new Date()) {
+    const parsed = parseHours(listing?.hours);
+    if (parsed.always) {
+      return { status: 'open', label: t('status.open'), detail: t('status.open24'), always: true };
+    }
+    if (!parsed.known) {
+      return { status: 'unknown', label: '', detail: t('status.unknown') };
+    }
+
+    const dow = now.getDay();
+    const minutes = now.getHours() * 60 + now.getMinutes();
+
+    // Plages du jour + débordement de la veille (garde de nuit).
+    const candidates = [...parsed.days[dow]];
+    parsed.days[(dow + 6) % 7].forEach((range) => {
+      if (range.end > 1440) candidates.push({ start: range.start - 1440, end: range.end - 1440 });
+    });
+
+    for (const range of candidates) {
+      if (minutes >= range.start && minutes < range.end) {
+        const remaining = range.end - minutes;
+        if (remaining <= 60) {
+          return {
+            status: 'soon',
+            label: t('status.closingSoon'),
+            detail: t('status.closesAt', { time: formatClock(range.end) }),
+            remaining,
+          };
+        }
+        return {
+          status: 'open',
+          label: t('status.open'),
+          detail: t('status.closesAt', { time: formatClock(range.end) }),
+        };
+      }
+    }
+
+    // Prochaine ouverture, sur une semaine glissante.
+    for (let offset = 0; offset < 8; offset += 1) {
+      const day = (dow + offset) % 7;
+      const ranges = [...parsed.days[day]].sort((a, b) => a.start - b.start);
+      for (const range of ranges) {
+        const start = range.start + offset * 1440;
+        if (start <= minutes) continue;
+        const detail =
+          offset === 0
+            ? t('status.opensAt', { time: formatClock(range.start) })
+            : offset === 1
+              ? t('status.opensTomorrow', { time: formatClock(range.start) })
+              : t('status.opensDay', { day: dayName(day), time: formatClock(range.start) });
+        return { status: 'closed', label: t('status.closed'), detail };
+      }
+    }
+
+    return { status: 'closed', label: t('status.closed'), detail: t('status.closedToday') };
+  }
+
+  /** Vrai si l'adresse est ouverte (ou sur le point de fermer). */
+  function isOpenNow(listing) {
+    return ['open', 'soon'].includes(getOpenState(listing).status);
+  }
+
+  /* ------------------------- Préférences d'affichage ---------------------- */
+
+  function dataSaverActive() {
+    if (state.dataSaver === 'on') return true;
+    if (state.dataSaver === 'off') return false;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    return Boolean(connection?.saveData) || /(^|-)2g$/.test(connection?.effectiveType || '');
+  }
+
+  function imagesEnabled() {
+    return state.images !== 'none';
+  }
+
+  /** Source de la photo de couverture (catégorie ou photo ajoutée par le commerçant). */
+  function listingPhoto(listing) {
+    if (!imagesEnabled()) return '';
+    if (listing?.photo) return listing.photo;
+    const cat = getCategory(listing?.category);
+    if (!cat?.photo) return '';
+    return dataSaverActive() ? cat.photoSmall || cat.photo : cat.photo;
+  }
+
+  /** Balise <img> paresseuse, avec repli visuel assuré par le conteneur. */
+  function lazyImage(src, { alt = '', className = '', width, height } = {}) {
+    if (!src) return '';
+    return `<img class="${className}" src="${escapeHtml(src)}" alt="${escapeHtml(alt)}"
+      ${width ? `width="${width}" height="${height || Math.round((width * 2) / 3)}"` : ''}
+      loading="lazy" decoding="async" />`;
+  }
+
+  /* ---------------------------- Avis & note ------------------------------- */
+
+  /** Avis de démonstration + avis publiés depuis l'application. */
+  function reviewsFor(listingId) {
+    const seeded = Array.isArray(REVIEWS[listingId]) ? REVIEWS[listingId] : [];
+    const custom = Array.isArray(state.reviews[listingId]) ? state.reviews[listingId] : [];
+    const reported = new Set(state.reports.map((report) => report.reviewId));
+    return [...custom.map((review) => ({ ...review, mine: true })), ...seeded].map((review) => ({
+      ...review,
+      reported: reported.has(review.id),
+    }));
+  }
+
+  /** Note agrégée : note de base (annuaire) + avis publiés depuis l'app. */
+  function aggregateRating(listing) {
+    const baseCount = Number(listing?.reviews) || 0;
+    const baseAvg = Number(listing?.rating) || 0;
+    const custom = Array.isArray(state.reviews[listing?.id]) ? state.reviews[listing.id] : [];
+    if (!custom.length) return { avg: baseAvg, count: baseCount };
+    const total = baseAvg * baseCount + custom.reduce((sum, review) => sum + Number(review.rating || 0), 0);
+    const count = baseCount + custom.length;
+    return { avg: count ? total / count : 0, count };
+  }
+
+  /* --------------------------- Indice de confiance ------------------------ */
+
+  /**
+   * Indice 0–100, expliqué à l'utilisateur :
+   *   • profil complété (45 pts)  → coordonnées, repère, horaires, description…
+   *   • qualité des avis (35 pts) → note moyenne + volume d'avis
+   *   • ancienneté (20 pts)       → jusqu'à 24 mois de présence
+   * Aucun partenariat payant n'entre dans le calcul.
+   */
+  function getTrustScore(listing) {
+    const cat = getCategory(listing.category);
+    const fieldCount = Object.values(listing.fields || {}).filter(
+      (value) => value !== '' && value !== null && value !== undefined && value !== false
+    ).length;
+
+    const checks = [
+      Boolean(listing.phone),
+      Boolean(listing.whatsapp),
+      Boolean(listing.address && listing.address.length >= 8),
+      Boolean(listing.landmark),
+      Boolean(listing.hours),
+      String(listing.description || '').length >= 120,
+      Array.isArray(listing.coords) && listing.coords.length === 2,
+      Boolean(cat.photo || listing.photo),
+      (listing.subcategories || []).length > 0,
+      fieldCount >= 2,
+    ];
+    const profile = Math.round((checks.filter(Boolean).length / checks.length) * 45);
+
+    const { avg, count } = aggregateRating(listing);
+    const reviewPoints = Math.min(
+      35,
+      Math.round((avg / 5) * 20 + (Math.log10(count + 1) / Math.log10(250)) * 15)
+    );
+
+    const created = new Date(listing.createdAt || Date.now()).getTime();
+    const months = Math.max(0, (Date.now() - created) / (1000 * 60 * 60 * 24 * 30.44));
+    const seniority = Math.round(Math.min(1, months / 24) * 20);
+
+    return {
+      score: Math.max(0, Math.min(100, profile + reviewPoints + seniority)),
+      profile,
+      reviews: reviewPoints,
+      seniority,
+      checks,
+    };
+  }
+
+  function trustTier(score) {
+    if (score >= 75) return 'high';
+    if (score >= 55) return 'mid';
+    return 'low';
+  }
+
+  /* ---------------------------- Promotions -------------------------------- */
+
+  function promoFor(listingId) {
+    const custom = state.promos[listingId];
+    if (custom && (!custom.expires || new Date(`${custom.expires}T23:59:59`) >= new Date())) return custom;
+    const seeded = PROMOS[listingId];
+    if (seeded && (!seeded.expires || new Date(`${seeded.expires}T23:59:59`) >= new Date())) return seeded;
+    return null;
+  }
+
+  function promoPercent(promo) {
+    if (!promo) return '';
+    const match = /(-?\d+)\s*%/.exec(`${promo.title} ${promo.detail || ''}`);
+    return match ? String(Math.abs(Number(match[1]))) : '';
+  }
+
+  /* -------------------------- Offres du jour ------------------------------ */
+
+  function getDailyOffers() {
+    const entries = [];
+    Object.entries(DAILY_OFFERS).forEach(([listingId, offer]) => {
+      const listing = getListing(listingId);
+      const overridden = state.offers[listingId]?.date === todayISO();
+      if (listing && !overridden) entries.push({ ...offer, listingId, listing, seeded: true });
+    });
+    Object.entries(state.offers).forEach(([listingId, offer]) => {
+      const listing = getListing(listingId);
+      if (!listing || !offer || offer.date !== todayISO()) return;
+      entries.push({ ...offer, listingId, listing });
+    });
+    return entries;
+  }
+
+  function dailyOfferFor(listingId) {
+    const offer = state.offers[listingId];
+    return offer && offer.date === todayISO() ? offer : null;
+  }
+
+  /* ------------------------------ Historique ------------------------------ */
+
+  function recordHistory(entry) {
+    const item = { ...entry, at: Date.now() };
+    const filtered = state.history.filter((old) => {
+      if (entry.type === 'search') return !(old.type === 'search' && old.q === entry.q);
+      if (entry.type === 'view') return !(old.type === 'view' && old.id === entry.id);
+      return true;
+    });
+    state.history = [item, ...filtered].slice(0, 40);
+    writeStorage(STORAGE.history, state.history);
+  }
+
+  /**
+   * Suggestions : catégories issues des fiches consultées (poids 3), des
+   * recherches reconnues (poids 2) et des comparaisons (poids 1).
+   */
+  function getSuggestions(limit = 4) {
+    const weights = new Map();
+    state.history.forEach((entry) => {
+      if (entry.type === 'view' || entry.type === 'compare') {
+        const listing = getListing(entry.id);
+        if (listing) weights.set(listing.category, (weights.get(listing.category) || 0) + (entry.type === 'view' ? 3 : 1));
+      }
+      if (entry.type === 'search' && entry.q) {
+        const needle = normalize(entry.q);
+        state.listings.forEach((listing) => {
+          if (normalize(listing.name).includes(needle) || normalize(listing.description).includes(needle)) {
+            weights.set(listing.category, (weights.get(listing.category) || 0) + 2);
+          }
+        });
+      }
+    });
+
+    const viewed = new Set(state.history.filter((entry) => entry.type === 'view').map((entry) => entry.id));
+    const ranked = state.listings
+      .filter((listing) => !viewed.has(listing.id) && weights.has(listing.category))
+      .map((listing) => ({
+        listing,
+        weight: weights.get(listing.category),
+        trust: getTrustScore(listing).score,
+      }))
+      .sort((a, b) => b.weight - a.weight || b.trust - a.trust || (b.listing.rating || 0) - (a.listing.rating || 0));
+
+    return ranked.slice(0, limit).map((entry) => entry.listing);
+  }
+
+  /** Recherches récentes (pour les puces sous la barre de recherche). */
+  function recentSearches(limit = 3) {
+    return state.history
+      .filter((entry) => entry.type === 'search' && entry.q)
+      .slice(0, limit);
+  }
+
+  /* -------------------------------- Partage ------------------------------- */
+
+  /** Base absolue du site (fonctionne en http(s) ; vide en file://). */
+  function siteBase() {
+    if (location.origin === 'null' || !/^https?:$/.test(location.protocol)) return '';
+    return `${location.origin}${location.pathname.replace(/[^/]*$/, '')}`;
+  }
+
+  /** Page statique de partage (Open Graph lisible par WhatsApp). */
+  function sharePageUrl(listing) {
+    return `${siteBase()}partage/${slugify(listing.id)}.html`;
+  }
+
+  function listingUrl(listing) {
+    return `${siteBase()}#/adresse/${listing.id}`;
+  }
+
+  function whatsappMessage(listing) {
+    const name = listing.name;
+    if (listing.category === 'restaurants') {
+      return `Bonjour, je vous ai trouvé sur BamaHub. Je souhaite commander chez ${name}.`;
+    }
+    if (listing.category === 'hotels') {
+      return `Bonjour, je vous ai trouvé sur BamaHub. Je souhaite réserver à ${name}.`;
+    }
+    if (listing.category === 'pharmacies') {
+      return `Bonjour, je vous ai trouvé sur BamaHub. Avez-vous les médicaments suivants en stock ?`;
+    }
+    return `Bonjour, je vous ai trouvé sur BamaHub et je souhaite avoir des informations sur ${name}.`;
+  }
+
+  /** Lien WhatsApp direct avec message pré-rempli. */
+  function whatsappContactUrl(listing) {
+    // À défaut de numéro WhatsApp dédié, on réutilise le téléphone : chaque
+    // fiche propose ainsi un contact WhatsApp avec un message pré-rempli.
+    const number = String(listing.whatsapp || listing.phone || '').replace(/\D/g, '');
+    if (!number) return '';
+    return `https://wa.me/${number}?text=${encodeURIComponent(whatsappMessage(listing))}`;
+  }
+
+  /* --------------------------------- QR ----------------------------------- */
+
+  function qrSvg(text, { cellSize = 4, margin = 2, label = '' } = {}) {
+    if (!text || typeof window.qrcode !== 'function') return '';
+    try {
+      const qr = window.qrcode(0, 'M');
+      // Mode octet : indispensable pour les caractères bambara (ɛ, ɔ, ɲ).
+      qr.addData(String(text), 'Byte');
+      qr.make();
+      return qr.createSvgTag({
+        cellSize,
+        margin,
+        scalable: true,
+        alt: label || 'QR code',
+        title: label || 'QR code',
+      });
+    } catch (error) {
+      console.warn('BamaHub : génération du QR impossible.', error);
+      return '';
+    }
+  }
+
   /** Lecture défensive du localStorage. */
   function readStorage(key, fallback) {
     try {
@@ -201,7 +706,23 @@
     mapFitTimer: null,
     mapOfflineNoticeShown: false,
     authReturnRoute: '#/',
+    authOpen: false,
     lastFocusedElement: null,
+    // v2 : avis, promos, offres, comparaison, historique, préférences
+    reviews: {},
+    reports: [],
+    promos: {},
+    offers: {},
+    history: [],
+    compare: new Set(),
+    dataSaver: 'auto',
+    images: 'normal',
+    voiceRecognition: null,
+    voiceActive: false,
+    reviewPhotoDraft: null,
+    helpfulGiven: new Set(),
+    searchHistoryTimer: null,
+    settingsOpen: false,
   };
 
   /** Charge les adresses ajoutées localement + les favoris. */
@@ -241,6 +762,26 @@
     state.session = session?.email
       ? state.accounts.find((account) => account.email === session.email) || null
       : null;
+
+    // Préférences et contenus de la v2 (tous optionnels).
+    const reviews = readStorage(STORAGE.reviews, {});
+    state.reviews = reviews && typeof reviews === 'object' && !Array.isArray(reviews) ? reviews : {};
+    const reports = readStorage(STORAGE.reports, []);
+    state.reports = Array.isArray(reports) ? reports.filter((report) => report && report.reviewId) : [];
+    const promos = readStorage(STORAGE.promos, {});
+    state.promos = promos && typeof promos === 'object' && !Array.isArray(promos) ? promos : {};
+    const offers = readStorage(STORAGE.offers, {});
+    state.offers = offers && typeof offers === 'object' && !Array.isArray(offers) ? offers : {};
+    const history = readStorage(STORAGE.history, []);
+    state.history = Array.isArray(history) ? history.filter((entry) => entry && entry.type) : [];
+    const compare = readStorage(STORAGE.compare, []);
+    state.compare = new Set(
+      Array.isArray(compare) ? compare.filter((id) => state.listings.some((listing) => listing.id === id)).slice(0, 3) : []
+    );
+    const dataSaver = readStorage(STORAGE.dataSaver, 'auto');
+    state.dataSaver = ['auto', 'on', 'off'].includes(dataSaver) ? dataSaver : 'auto';
+    const images = readStorage(STORAGE.images, 'normal');
+    state.images = ['normal', 'none'].includes(images) ? images : 'normal';
   }
 
   const getCategory = (id) => CATEGORIES.find((cat) => cat.id === id) || FALLBACK_CATEGORY;
@@ -283,6 +824,26 @@
     writeStorage(STORAGE.favorites, [...state.favorites]);
   }
 
+  function persistReviews() {
+    return writeStorage(STORAGE.reviews, state.reviews);
+  }
+
+  function persistReports() {
+    return writeStorage(STORAGE.reports, state.reports);
+  }
+
+  function persistCompare() {
+    return writeStorage(STORAGE.compare, [...state.compare]);
+  }
+
+  function persistPromos() {
+    return writeStorage(STORAGE.promos, state.promos);
+  }
+
+  function persistOffers() {
+    return writeStorage(STORAGE.offers, state.offers);
+  }
+
   /* ==========================================================================
      Icônes (SVG inline, aucune dépendance externe)
      ========================================================================== */
@@ -322,7 +883,41 @@
     crosshair: icon('<circle cx="12" cy="12" r="7"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>'),
     route: icon('<circle cx="6" cy="19" r="2.2"/><circle cx="18" cy="5" r="2.2"/><path d="M8.2 19h4.3a4 4 0 0 0 4-4V8.2"/>'),
     eye: icon('<path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/>'),
+    shield: icon('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="m9 12 2 2 4-4"/>'),
+    shieldAlert: icon('<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z"/><path d="M12 8v4M12 16h.01"/>'),
+    mic: icon('<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v4M8 21h8"/>'),
+    qr: icon('<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3h-3zM20 14v.01M14 20h.01M20 20v.01M20 17h.01M17 20h.01"/>'),
+    compare: icon('<path d="M4 4h6v16H4zM14 4h6v16h-6z"/><path d="M7 9h0M17 15h0"/>'),
+    tag: icon('<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8Z"/><circle cx="7.5" cy="7.5" r="1.5"/>'),
+    camera: icon('<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z"/><circle cx="12" cy="13" r="3.2"/>'),
+    printer: icon('<path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8" rx="1"/>'),
+    settings: icon('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/>'),
+    globe: icon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/>'),
+    check: icon('<path d="m5 12 4 4L19 6"/>'),
+    alert: icon('<path d="M12 3 2 21h20L12 3Z"/><path d="M12 9v5M12 18h.01"/>'),
+    imageOff: icon('<path d="m3 3 18 18"/><path d="M21 15V6a2 2 0 0 0-2-2H8M3 6v12a2 2 0 0 0 2 2h12"/><path d="m8 12 2 2 3-3"/>'),
+    users: icon('<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13A4 4 0 0 1 16 11"/>'),
+    phoneCall: icon('<path d="M15.5 14.5 19 18a2 2 0 0 1-1.5 3.4A16 16 0 0 1 2.6 6.5 2 2 0 0 1 6 5l3.5 3.5-2 2a12.5 12.5 0 0 0 6 6l2-2Z"/>'),
+    sparkle: icon('<path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z"/>'),
   };
+
+  /** Badge d'état d'ouverture, recalculé chaque minute par refreshOpenBadges(). */
+  function openBadge(listing, { withDetail = false } = {}) {
+    const status = getOpenState(listing);
+    if (status.status === 'unknown') return '';
+    return `<span class="open-badge is-${status.status}" data-open-badge="${escapeHtml(listing.id)}"${withDetail ? ' data-open-detail="true"' : ''} title="${escapeHtml(status.detail)}">
+      <span class="dot" aria-hidden="true"></span>${escapeHtml(status.label)}
+      ${withDetail ? `<span class="open-detail">· ${escapeHtml(status.detail)}</span>` : ''}
+    </span>`;
+  }
+
+  /** Pastille d'indice de confiance. */
+  function trustBadge(listing, { label = false } = {}) {
+    const { score } = getTrustScore(listing);
+    return `<span class="trust-badge is-${trustTier(score)}" title="${escapeHtml(t('card.trust', { score }))}">
+      ${ICONS.shield}<strong>${score}</strong>${label ? `<span class="trust-label">${escapeHtml(t('detail.trust.title'))}</span>` : ''}
+    </span>`;
+  }
 
   const categoryIcon = (cat) =>
     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${cat.icon}</svg>`;
@@ -336,8 +931,8 @@
     const info = getPriceInfo(listing);
     if (!info) {
       return detailed
-        ? '<span class="no-price">Tarif sur demande</span>'
-        : '<span class="no-price">Prix sur demande</span>';
+        ? `<span class="no-price">${escapeHtml(t('card.noPriceLong'))}</span>`
+        : `<span class="no-price">${escapeHtml(t('card.noPrice'))}</span>`;
     }
 
     const prefix = info.prefix ? `<span class="price-prefix">${escapeHtml(info.prefix)}</span>` : '';
@@ -352,10 +947,11 @@
   }
 
   function ratingMarkup(listing) {
-    if (!listing.rating) {
-      return '<span class="pill pill-outline">Nouveau</span>';
+    const { avg, count } = aggregateRating(listing);
+    if (!avg || !count) {
+      return `<span class="pill pill-outline">${escapeHtml(t('card.new'))}</span>`;
     }
-    return `<span class="card-rating" title="Note moyenne de ${formatRating(listing.rating)} sur 5">${ICONS.star}<strong>${formatRating(listing.rating)}</strong><span>(${formatNumber(listing.reviews || 0)} avis)</span></span>`;
+    return `<span class="card-rating" title="${escapeHtml(t('card.ratingTitle', { rating: formatRating(avg) }))}">${ICONS.star}<strong>${formatRating(avg)}</strong><span>${escapeHtml(t('card.reviews', { n: formatNumber(count) }))}</span></span>`;
   }
 
   function statusBadges(listing) {
@@ -386,33 +982,60 @@
   function listingCard(listing, index = 0, { preview = false } = {}) {
     const cat = getCategory(listing.category);
     const badges = statusBadges(listing);
-    const mediaBadges = badges.length
-      ? badges.slice(0, 2).map((badge) => `<span class="media-badge is-status">${escapeHtml(badge)}</span>`)
-      : [`<span class="media-badge">${escapeHtml(cat.label)}</span>`];
+    const status = getOpenState(listing);
+    const promo = promoFor(listing.id);
+    const percent = promoPercent(promo);
+    const photo = listingPhoto(listing);
+    const compared = state.compare.has(listing.id);
 
-    const subcategory = listing.subcategories?.[0] || cat.label;
+    const mediaLabels = [];
+    if (status.status !== 'unknown') {
+      mediaLabels.push(
+        `<span class="open-badge is-${status.status}" data-open-badge="${escapeHtml(listing.id)}" title="${escapeHtml(status.detail)}"><span class="dot" aria-hidden="true"></span>${escapeHtml(status.label)}</span>`
+      );
+    }
+    if (promo) {
+      mediaLabels.push(`<span class="promo-badge" title="${escapeHtml(promo.title)}">${ICONS.tag}${percent ? `−${escapeHtml(percent)} %` : escapeHtml(t('quick.promo'))}</span>`);
+    }
+    if (!mediaLabels.length) {
+      mediaLabels.push(`<span class="media-badge">${escapeHtml(badges[0] || catLabel(cat))}</span>`);
+    }
+
+    const subcategory = listing.subcategories?.[0] || catLabel(cat);
     const title = preview
       ? `<span>${escapeHtml(listing.name)}</span>`
       : `<a href="#/adresse/${escapeHtml(listing.id)}">${escapeHtml(listing.name)}</a>`;
-    return `<article class="listing-card" style="--cat:${escapeHtml(cat.color)};--i:${Math.min(index, 8)}"${preview ? ' data-preview="true"' : ''}>
-      <div class="card-media">
+
+    return `<article class="listing-card${promo ? ' has-promo' : ''}" style="--cat:${escapeHtml(cat.color)};--i:${Math.min(index, 8)}" data-listing-id="${escapeHtml(listing.id)}"${preview ? ' data-preview="true"' : ''}>
+      <div class="card-media${photo ? ' has-photo' : ''}">
+        ${lazyImage(photo, { alt: '', className: 'card-photo', width: 640 })}
         <div class="media-icon">${categoryIcon(cat)}</div>
         ${preview ? '' : favoriteButton(listing)}
-        <div class="media-labels">${mediaBadges.join('')}</div>
+        <div class="media-labels">${mediaLabels.join('')}</div>
       </div>
       <div class="card-body">
-        <p class="card-kicker">${escapeHtml(subcategory)} <span class="sep">·</span> ${escapeHtml(listing.neighborhood || 'Bamako')}</p>
+        <p class="card-kicker">${escapeHtml(subcategory)} <span class="sep">·</span> ${escapeHtml(catLabel(cat))}</p>
         <h3 class="card-title">${title}</h3>
-        ${ratingMarkup(listing)}
-        ${distanceLabel(listing) ? `<p class="card-distance">${ICONS.crosshair} Vous êtes ${escapeHtml(distanceLabel(listing))}</p>` : ''}
+        <div class="card-badges">
+          ${ratingMarkup(listing)}
+          ${trustBadge(listing)}
+        </div>
+        ${distanceLabel(listing) ? `<p class="card-distance">${ICONS.crosshair} ${escapeHtml(t('card.distance', { distance: distanceLabel(listing) }))}</p>` : ''}
         <div class="card-meta">
           <span>${ICONS.mapPin} ${escapeHtml(listing.neighborhood || 'Bamako')}</span>
-          <span>${ICONS.clock} ${escapeHtml(listing.hours || 'Horaires sur demande')}</span>
+          <span class="card-hours">${ICONS.clock} ${escapeHtml(listing.hours || t('card.hoursUnknown'))}</span>
         </div>
-        <p class="card-desc">${escapeHtml(listing.description || 'Aucune description pour le moment.')}</p>
+        <p class="card-desc">${escapeHtml(listing.description || t('card.noDescription'))}</p>
         <div class="card-footer">
           <div class="card-price">${priceMarkup(listing)}</div>
-          <span class="card-cta">${preview ? 'Aperçu' : 'Voir la fiche'} ${ICONS.arrowRight}</span>
+          <div class="card-tools">
+            <button type="button" class="compare-btn${compared ? ' is-active' : ''}" data-compare="${escapeHtml(listing.id)}"
+              aria-pressed="${compared}" aria-label="${escapeHtml(t('explore.compare'))} — ${escapeHtml(listing.name)}"
+              title="${escapeHtml(t('explore.compare'))}">
+              ${compared ? ICONS.check : ICONS.compare}<span>${escapeHtml(compared ? t('detail.compare') : t('explore.compare'))}</span>
+            </button>
+            <span class="card-cta">${escapeHtml(preview ? t('card.preview') : t('card.view'))} ${ICONS.arrowRight}</span>
+          </div>
         </div>
       </div>
     </article>`;
@@ -461,6 +1084,11 @@
       // On évite d'afficher deux fois la même adresse sur l'accueil.
       .filter((listing) => !latestIds.has(listing.id))
       .slice(0, 3);
+    const duty = state.listings.filter((listing) => listing.fields?.onDuty === true);
+    const offers = getDailyOffers().slice(0, 4);
+    const suggestions = getSuggestions(4);
+    const recents = recentSearches(2);
+    const hasHistory = recents.length > 0 || suggestions.length > 0;
 
     const categoryCards = CATEGORIES.map((cat) => {
       const count = state.listings.filter((listing) => listing.category === cat.id).length;
@@ -470,52 +1098,162 @@
           <span class="cat-arrow">${ICONS.arrowRight}</span>
         </div>
         <div class="cat-info">
-          <h3>${escapeHtml(cat.label)}</h3>
-          <p>${count} adresse${count > 1 ? 's' : ''}</p>
+          <h3>${escapeHtml(catLabel(cat))}</h3>
+          <p>${count} ${escapeHtml(count > 1 ? t('common.addresses') : t('common.address'))}</p>
         </div>
       </a>`;
     }).join('');
+
+    const dutyMarkup = duty.length
+      ? `<section class="section" aria-labelledby="duty-title">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">${ICONS.shieldAlert} ${escapeHtml(t('home.duty.eyebrow'))}</span>
+              <h2 id="duty-title">${escapeHtml(t('home.duty.title'))}</h2>
+              <p>${escapeHtml(t('home.duty.sub'))}</p>
+            </div>
+            <a class="section-link" href="#/explorer?quick=duty">${escapeHtml(t('home.all'))} ${ICONS.arrowRight}</a>
+          </div>
+          <div class="home-duty-strip">
+            ${duty
+              .map((listing) => {
+                const status = getOpenState(listing);
+                const rawPhone = (listing.phone || '').replace(/[^\d+]/g, '');
+                return `<a class="home-duty-card" href="#/adresse/${escapeHtml(listing.id)}">
+                  <span class="pill-icon">${ICONS.shield}</span>
+                  <span>
+                    <strong>${escapeHtml(listing.name)}</strong>
+                    <span>${escapeHtml(listing.neighborhood)} · ${escapeHtml(status.detail)}</span>
+                  </span>
+                  ${rawPhone ? `<span class="duty-call" aria-hidden="true">${ICONS.phone}</span>` : ''}
+                </a>`;
+              })
+              .join('')}
+          </div>
+        </section>`
+      : '';
+
+    const offersMarkup = offers.length
+      ? `<section class="section" aria-labelledby="offers-title">
+          <div class="section-head">
+            <div>
+              <span class="eyebrow">${ICONS.sparkle} ${escapeHtml(t('home.offers.eyebrow'))}</span>
+              <h2 id="offers-title">${escapeHtml(t('home.offers.title'))}</h2>
+              <p>${escapeHtml(t('home.offers.sub'))}</p>
+            </div>
+          </div>
+          <div class="offers-strip">
+            ${offers
+              .map(({ listing, title, price, description, photo: offerPhoto }) => {
+                const cat = getCategory(listing.category);
+                const photo = imagesEnabled() ? offerPhoto || (dataSaverActive() ? cat.photoSmall : cat.photo) : '';
+                return `<a class="offer-card" href="#/adresse/${escapeHtml(listing.id)}">
+                  ${photo ? `<img class="offer-thumb" src="${escapeHtml(photo)}" alt="" width="82" height="82" loading="lazy" decoding="async" />` : ''}
+                  <span class="offer-body">
+                    <span class="offer-eyebrow">${ICONS.sparkle}${escapeHtml(t('common.today'))}</span>
+                    <strong>${escapeHtml(title)}</strong>
+                    <span class="offer-price">${escapeHtml(t('home.offers.from'))} <b>${formatMoney(price)}</b></span>
+                    <span class="offer-shop">${escapeHtml(listing.name)} · ${escapeHtml(listing.neighborhood || 'Bamako')}</span>
+                  </span>
+                </a>`;
+              })
+              .join('')}
+          </div>
+        </section>`
+      : '';
+
+    const suggestionMarkup = hasHistory
+      ? `<div class="suggestion-chips" aria-label="${escapeHtml(t('home.forYou.title'))}">
+          <span class="label">${escapeHtml(t('home.forYou.title'))}</span>
+          ${recents
+            .map(
+              (entry) =>
+                `<a class="suggestion-chip" href="#/explorer?q=${encodeURIComponent(entry.q)}">${ICONS.search}${escapeHtml(entry.q)}</a>`
+            )
+            .join('')}
+          ${suggestions
+            .slice(0, 3)
+            .map(
+              (listing) =>
+                `<a class="suggestion-chip" href="#/adresse/${escapeHtml(listing.id)}">${ICONS.sparkle}${escapeHtml(listing.name)}</a>`
+            )
+            .join('')}
+        </div>`
+      : '';
+
+    const forYouMarkup =
+      suggestions.length > 0
+        ? `<section class="section" aria-labelledby="foryou-title">
+            <div class="section-head">
+              <div>
+                <span class="eyebrow">${ICONS.sparkle} ${escapeHtml(t('home.forYou.sub'))}</span>
+                <h2 id="foryou-title">${escapeHtml(t('home.forYou.title'))}</h2>
+              </div>
+              <button type="button" class="section-link" data-clear-history>${ICONS.refresh} ${escapeHtml(t('home.forYou.clear'))}</button>
+            </div>
+            <div class="suggestion-chips">
+              ${suggestions
+                .map(
+                  (listing) => `<a class="suggestion-chip" href="#/adresse/${escapeHtml(listing.id)}">
+                    ${ICONS.sparkle}<strong>${escapeHtml(listing.name)}</strong> · ${escapeHtml(catLabel(getCategory(listing.category)))} · ${escapeHtml(listing.neighborhood || 'Bamako')}
+                  </a>`
+                )
+                .join('')}
+            </div>
+          </section>`
+        : '';
 
     document.title = 'BamaHub — L’annuaire de Bamako';
 
     $('#main').innerHTML = `
       <section class="hero">
         <div class="container hero-content">
-          <span class="hero-eyebrow"><span class="dot"></span> Annuaire local · Bamako, Mali</span>
-          <h1>Les bonnes adresses de <span class="gradient">Bamako</span>, à portée de main.</h1>
-          <p class="hero-sub">Restaurants, hôtels, pharmacies de garde, artisans et adresses utiles : trouvez le bon contact, appelez et gardez vos favoris sous la main.</p>
+          <span class="hero-eyebrow"><span class="dot"></span> ${escapeHtml(t('home.eyebrow'))}</span>
+          <h1>${t('home.title')}</h1>
+          <p class="hero-sub">${escapeHtml(t('home.sub'))}</p>
 
           <form class="search-form" data-search-form role="search">
-            <label class="sr-only" for="home-search">Rechercher une adresse à Bamako</label>
-            ${ICONS.search}
-            <input id="home-search" type="search" name="q" placeholder="Restaurant, pharmacie, quartier, repère…" autocomplete="off" />
-            <button class="btn btn-primary" type="submit">Rechercher</button>
+            <div class="search-field">
+              ${ICONS.search}
+              <label class="sr-only" for="home-search">${escapeHtml(t('home.search.label'))}</label>
+              <input id="home-search" type="search" name="q" placeholder="${escapeHtml(t('home.search.placeholder'))}" autocomplete="off" />
+              <button type="button" class="mic-btn" data-voice="home" aria-label="${escapeHtml(t('explore.voice'))}" title="${escapeHtml(t('explore.voice'))}">${ICONS.mic}</button>
+            </div>
+            <button class="btn btn-primary search-submit" type="submit" aria-label="${escapeHtml(t('home.search.action'))}">
+              <span class="search-submit-icon">${ICONS.search}</span>
+              <span class="search-submit-label">${escapeHtml(t('home.search.action'))}</span>
+            </button>
           </form>
 
           <div class="search-hints">
-            <span>Essayez :</span>
-            <a class="hint-chip" href="#/explorer?quick=duty">Pharmacie de garde</a>
+            <span>${escapeHtml(t('home.try'))}</span>
+            <a class="hint-chip" href="#/explorer?quick=duty">${escapeHtml(t('quick.duty'))}</a>
             <a class="hint-chip" href="#/explorer?cat=restaurants">Riz au gras</a>
             <a class="hint-chip" href="#/explorer?q=poisson">Poisson braisé</a>
             <a class="hint-chip" href="#/explorer?cat=hotels">Hôtel ACI 2000</a>
           </div>
 
+          ${suggestionMarkup}
+
           <div class="hero-stats">
-            <div class="hero-stat"><strong>${total}</strong><span>adresses</span></div>
-            <div class="hero-stat"><strong>${CATEGORIES.length}</strong><span>catégories</span></div>
-            <div class="hero-stat"><strong>${NEIGHBORHOODS.length}</strong><span>quartiers couverts</span></div>
-            <div class="hero-stat"><strong>100 %</strong><span>local &amp; gratuit</span></div>
+            <div class="hero-stat"><strong>${total}</strong><span>${escapeHtml(t('home.stats.addresses'))}</span></div>
+            <div class="hero-stat"><strong>${CATEGORIES.length}</strong><span>${escapeHtml(t('home.stats.categories'))}</span></div>
+            <div class="hero-stat"><strong>${NEIGHBORHOODS.length}</strong><span>${escapeHtml(t('home.stats.hoods'))}</span></div>
+            <div class="hero-stat"><strong>100 %</strong><span>${escapeHtml(t('home.stats.local'))}</span></div>
           </div>
         </div>
       </section>
 
       <div class="container">
+        ${dutyMarkup}
+        ${offersMarkup}
+
         <section class="section" aria-labelledby="categories-title">
           <div class="section-head">
             <div>
-              <span class="eyebrow">Explorer</span>
-              <h2 id="categories-title">Que cherchez-vous ?</h2>
-              <p>Toutes les catégories de l’annuaire, en un clin d’œil.</p>
+              <span class="eyebrow">${escapeHtml(t('home.explore.eyebrow'))}</span>
+              <h2 id="categories-title">${escapeHtml(t('home.explore.title'))}</h2>
+              <p>${escapeHtml(t('home.explore.sub'))}</p>
             </div>
           </div>
           <div class="category-grid stagger">${categoryCards}</div>
@@ -524,11 +1262,11 @@
         <section class="section" aria-labelledby="latest-title">
           <div class="section-head">
             <div>
-              <span class="eyebrow">Nouveau à Bamako</span>
-              <h2 id="latest-title">Derniers ajouts</h2>
-              <p>Les adresses qui viennent de rejoindre BamaHub.</p>
+              <span class="eyebrow">${escapeHtml(t('home.latest.eyebrow'))}</span>
+              <h2 id="latest-title">${escapeHtml(t('home.latest.title'))}</h2>
+              <p>${escapeHtml(t('home.latest.sub'))}</p>
             </div>
-            <a class="section-link" href="#/explorer?sort=recent">Tout voir ${ICONS.arrowRight}</a>
+            <a class="section-link" href="#/explorer?sort=recent">${escapeHtml(t('home.all'))} ${ICONS.arrowRight}</a>
           </div>
           ${listingGrid(latest)}
         </section>
@@ -536,20 +1274,22 @@
         <section class="section" aria-labelledby="popular-title">
           <div class="section-head">
             <div>
-              <span class="eyebrow">Les incontournables</span>
-              <h2 id="popular-title">Populaires</h2>
-              <p>Les adresses les plus recommandées par les habitants.</p>
+              <span class="eyebrow">${escapeHtml(t('home.popular.eyebrow'))}</span>
+              <h2 id="popular-title">${escapeHtml(t('home.popular.title'))}</h2>
+              <p>${escapeHtml(t('home.popular.sub'))}</p>
             </div>
-            <a class="section-link" href="#/explorer?sort=note">Tout voir ${ICONS.arrowRight}</a>
+            <a class="section-link" href="#/explorer?sort=note">${escapeHtml(t('home.all'))} ${ICONS.arrowRight}</a>
           </div>
           ${listingGrid(popular)}
         </section>
 
+        ${forYouMarkup}
+
         <section class="section" aria-labelledby="hoods-title">
           <div class="section-head">
             <div>
-              <span class="eyebrow">Près de chez vous</span>
-              <h2 id="hoods-title">Explorer par quartier</h2>
+              <span class="eyebrow">${escapeHtml(t('home.hoods.eyebrow'))}</span>
+              <h2 id="hoods-title">${escapeHtml(t('home.hoods.title'))}</h2>
             </div>
           </div>
           <div class="hood-list">
@@ -561,13 +1301,12 @@
 
         <div class="cta-band">
           <div>
-            <h2>Vous tenez un commerce à Bamako ?</h2>
-            <p>Ajoutez votre adresse gratuitement et aidez les habitants à vous trouver.</p>
+            <h2>${escapeHtml(t('home.cta.title'))}</h2>
+            <p>${escapeHtml(t('home.cta.text'))}</p>
           </div>
-          <a class="btn btn-white btn-lg" href="#/ajouter">${ICONS.plus} Ajouter mon adresse</a>
+          <a class="btn btn-white btn-lg" href="#/ajouter">${ICONS.plus} ${escapeHtml(t('home.cta.action'))}</a>
         </div>
       </div>`;
-
   }
 
   /* --------------------------- Explorateur -------------------------------- */
@@ -634,7 +1373,7 @@
     const subcategories = [...new Set(categories.flatMap((cat) => cat.subcategories))].sort((a, b) =>
       a.localeCompare(b, 'fr')
     );
-    return `<option value="">Toutes les sous-catégories</option>${subcategories
+    return `<option value="">${escapeHtml(t('explore.allSubs'))}</option>${subcategories
       .map(
         (sub) =>
           `<option value="${escapeHtml(sub)}"${filters.sub === sub ? ' selected' : ''}>${escapeHtml(sub)}</option>`
@@ -654,12 +1393,12 @@
     if (!available.length) return '';
 
     return `<div class="quick-filters" role="group" aria-label="Filtres rapides">
-      <span class="label">Filtres rapides</span>
+      <span class="label">${getLang() === 'bm' ? 'Filtriw' : 'Filtres rapides'}</span>
       ${available
         .map((quick) => {
           const active = filters.quick === quick.id;
           return `<button type="button" class="quick-chip${active ? ' is-active' : ''}" data-quick="${quick.id}" aria-pressed="${active}">
-            ${ICONS.sparkles} ${escapeHtml(quick.label)}
+            ${ICONS.sparkles} ${escapeHtml(quickLabel(quick))}
           </button>`;
         })
         .join('')}
@@ -669,13 +1408,13 @@
   function categoryChipsHTML(filters) {
     return `<div class="category-chips" role="group" aria-label="Filtrer par catégorie">
       <button type="button" class="chip${filters.cat === '' ? ' is-active' : ''}" data-cat="" aria-pressed="${filters.cat === ''}">
-        Toutes <span class="chip-count">${state.listings.length}</span>
+        ${escapeHtml(getLang() === 'bm' ? 'Bɛɛ' : 'Toutes')} <span class="chip-count">${state.listings.length}</span>
       </button>
       ${CATEGORIES.map((cat) => {
         const count = state.listings.filter((listing) => listing.category === cat.id).length;
         const active = filters.cat === cat.id;
         return `<button type="button" class="chip${active ? ' is-active' : ''}" data-cat="${cat.id}" aria-pressed="${active}" style="--cat:${cat.color}">
-          <span class="chip-dot"></span>${escapeHtml(cat.label)} <span class="chip-count">${count}</span>
+          <span class="chip-dot"></span>${escapeHtml(catLabel(cat))} <span class="chip-count">${count}</span>
         </button>`;
       }).join('')}
     </div>`;
@@ -687,84 +1426,112 @@
     const filters = state.filters;
     const cat = filters.cat ? getCategory(filters.cat) : null;
 
-    const title = cat ? `${cat.label} à Bamako` : 'Toutes les adresses de Bamako';
-    const subtitle = cat
-      ? cat.tagline
-      : 'Parcourez l’annuaire, filtrez par catégorie, quartier ou besoin, et trouvez la bonne adresse en quelques secondes.';
+    const title = cat ? t('explore.catTitle', { cat: catLabel(cat) }) : t('explore.title');
+    const subtitle = cat ? cat.tagline : t('explore.subtitle');
 
-    document.title = cat ? `${cat.label} — BamaHub` : 'Explorer — BamaHub';
+    document.title = cat ? `${catLabel(cat)} — BamaHub` : `${t('nav.explore')} — BamaHub`;
+    const suggestions = getSuggestions(3);
+    const recents = recentSearches(3);
+    const dutyList = state.listings.filter((listing) => listing.fields?.onDuty === true);
+    const dutyBanner =
+      filters.quick === 'duty'
+        ? `<aside class="duty-banner" aria-label="${escapeHtml(t('home.duty.title'))}">
+            <span class="duty-icon">${ICONS.shieldAlert}</span>
+            <div>
+              <h2>${escapeHtml(t('home.duty.title'))}</h2>
+              <p>${escapeHtml(t('home.duty.sub'))}</p>
+            </div>
+            <div class="duty-list">
+              ${dutyList
+                .map((listing) => {
+                  const rawPhone = (listing.phone || '').replace(/[^\d+]/g, '');
+                  return `<a class="duty-pill" href="tel:${escapeHtml(rawPhone)}" title="${escapeHtml(listing.name)}">${ICONS.phone}${escapeHtml(listing.name)}</a>`;
+                })
+                .join('')}
+            </div>
+          </aside>`
+        : '';
 
     $('#main').innerHTML = `
       <div class="container page explorer-page">
         <div class="page-head">
           ${breadcrumbs([
-            { label: 'Accueil', href: '#/' },
-            { label: 'Explorer', href: '#/explorer' },
-            ...(cat ? [{ label: cat.label, href: explorerHash({ ...defaultFilters(), cat: cat.id }) }] : []),
+            { label: t('nav.home'), href: '#/' },
+            { label: t('nav.explore'), href: '#/explorer' },
+            ...(cat ? [{ label: catLabel(cat), href: explorerHash({ ...defaultFilters(), cat: cat.id }) }] : []),
           ])}
           <h1 class="page-title">${escapeHtml(title)}</h1>
           <p class="page-sub">${escapeHtml(subtitle)}</p>
         </div>
 
+        ${dutyBanner}
+
         <section class="explorer-toolbar" aria-label="Filtres de recherche">
           <div class="search-inline">
             ${ICONS.search}
-            <label class="sr-only" for="filter-q">Rechercher une adresse</label>
-            <input id="filter-q" class="input" type="search" placeholder="Nom, plat, service, quartier, repère…" value="${escapeHtml(filters.q)}" autocomplete="off" />
-            <button type="button" class="search-clear" data-clear-search aria-label="Effacer la recherche" ${filters.q ? '' : 'hidden'}>${ICONS.x}</button>
+            <label class="sr-only" for="filter-q">${escapeHtml(t('explore.search.label'))}</label>
+            <input id="filter-q" class="input" type="search" placeholder="${escapeHtml(t('explore.search.placeholder'))}" value="${escapeHtml(filters.q)}" autocomplete="off" />
+            <button type="button" class="mic-btn" data-voice="explorer" aria-label="${escapeHtml(t('explore.voice'))}" title="${escapeHtml(t('explore.voice'))}">${ICONS.mic}</button>
+            <button type="button" class="search-clear" data-clear-search aria-label="${escapeHtml(t('explore.clear'))}" ${filters.q ? '' : 'hidden'}>${ICONS.x}</button>
           </div>
+
+          ${recents.length || suggestions.length ? `<div class="suggestion-chips">
+            <span class="label">${escapeHtml(t('explore.suggestions'))}</span>
+            ${recents.map((entry) => `<a class="suggestion-chip" href="#/explorer?q=${encodeURIComponent(entry.q)}">${ICONS.search}${escapeHtml(entry.q)}</a>`).join('')}
+            ${suggestions.map((listing) => `<a class="suggestion-chip" href="#/adresse/${escapeHtml(listing.id)}">${ICONS.sparkle}${escapeHtml(listing.name)}</a>`).join('')}
+          </div>` : ''}
 
           ${categoryChipsHTML(filters)}
 
           <div class="quick-filters-slot">${quickFiltersHTML(filters)}</div>
 
           <button type="button" class="filters-toggle" data-filters-toggle aria-expanded="false" aria-controls="filters-panel">
-            <span class="toggle-left">${ICONS.sliders} Plus de filtres <span class="filter-count" data-filter-count ${activeFiltersCount() ? '' : 'hidden'}>${activeFiltersCount()}</span></span>
+            <span class="toggle-left">${ICONS.sliders} ${escapeHtml(t('explore.filters'))} <span class="filter-count" data-filter-count ${activeFiltersCount() ? '' : 'hidden'}>${activeFiltersCount()}</span></span>
             ${ICONS.chevronDown}
           </button>
 
           <div class="filters-panel" id="filters-panel">
             <div class="field">
-              <label for="filter-hood">Quartier</label>
+              <label for="filter-hood">${escapeHtml(t('explore.hood'))}</label>
               <select id="filter-hood" class="select">
-                <option value="">Tous les quartiers</option>
+                <option value="">${escapeHtml(t('explore.allHoods'))}</option>
                 ${NEIGHBORHOODS.map(
                   (hood) => `<option value="${escapeHtml(hood)}"${filters.hood === hood ? ' selected' : ''}>${escapeHtml(hood)}</option>`
                 ).join('')}
               </select>
             </div>
             <div class="field">
-              <label for="filter-sub">Sous-catégorie</label>
+              <label for="filter-sub">${escapeHtml(t('explore.sub'))}</label>
               <select id="filter-sub" class="select">${subcategoryOptionsHTML(filters)}</select>
             </div>
             <div class="field">
-              <label for="filter-sort">Trier par</label>
+              <label for="filter-sort">${escapeHtml(t('explore.sort'))}</label>
               <select id="filter-sort" class="select">
                 ${SORT_OPTIONS.map(
-                  (option) => `<option value="${option.id}"${filters.sort === option.id ? ' selected' : ''}>${option.label}</option>`
+                  (option) => `<option value="${option.id}"${filters.sort === option.id ? ' selected' : ''}>${escapeHtml(sortLabel(option))}</option>`
                 ).join('')}
               </select>
             </div>
-            <button type="button" class="filters-reset" data-reset-filters>${ICONS.refresh} Réinitialiser les filtres</button>
+            <button type="button" class="filters-reset" data-reset-filters>${ICONS.refresh} ${escapeHtml(t('explore.reset'))}</button>
           </div>
         </section>
 
         <div class="explorer-actions">
-          <div class="view-toggle" role="group" aria-label="Mode d’affichage">
+          <div class="view-toggle" role="group" aria-label="${escapeHtml(t('explore.view'))}">
             <button type="button" data-view="list" class="${filters.view === 'list' ? 'is-active' : ''}" aria-pressed="${filters.view === 'list'}">
-              ${ICONS.list} Liste
+              ${ICONS.list} ${escapeHtml(t('explore.list'))}
             </button>
             <button type="button" data-view="map" class="${filters.view === 'map' ? 'is-active' : ''}" aria-pressed="${filters.view === 'map'}">
-              ${ICONS.map} Carte
+              ${ICONS.map} ${escapeHtml(t('explore.map'))}
             </button>
           </div>
           <button type="button" class="near-me-toggle${state.nearMe ? ' is-active' : ''}" data-near-me aria-pressed="${state.nearMe}" aria-controls="near-me-bar">
-            ${ICONS.target} <span data-near-me-label>${state.nearMe ? 'Autour de moi · actif' : 'Autour de moi'}</span>
+            ${ICONS.target} <span data-near-me-label>${escapeHtml(state.nearMe ? t('explore.nearMeActive') : t('explore.nearMe'))}</span>
           </button>
         </div>
 
         <div class="near-me-bar" id="near-me-bar" data-near-me-bar ${state.nearMe ? '' : 'hidden'}>
-          <span class="near-me-label">${ICONS.radius} Rayon</span>
+          <span class="near-me-label">${ICONS.radius} ${escapeHtml(t('explore.radius'))}</span>
           <div class="radius-chips" role="group" aria-label="Rayon de recherche">
             ${RADIUS_OPTIONS.map(
               (option) => `<button type="button" class="radius-chip${option.value === state.radius ? ' is-active' : ''}" data-radius="${option.value}" aria-pressed="${option.value === state.radius}">${option.label}</button>`
@@ -784,8 +1551,16 @@
 
         <div class="map-shell" data-map-shell data-map-view ${filters.view === 'map' ? '' : 'hidden'}>
           <div id="explorer-map" class="explorer-map" role="application" aria-label="Carte des adresses de Bamako"></div>
-          <p class="map-hint">${ICONS.info} Cliquez sur une épingle pour voir l’adresse, l’itinéraire et le partage WhatsApp.</p>
+          <p class="map-hint">${ICONS.info} ${escapeHtml(t('explore.map.hint'))}</p>
         </div>
+      </div>
+
+      <div class="compare-tray" data-compare-tray hidden>
+        <span class="tray-label">${escapeHtml(t('explore.compare'))}</span>
+        <div class="tray-items" data-compare-items></div>
+        <button type="button" class="btn btn-ghost btn-sm" data-compare-clear>${escapeHtml(t('explore.compareClear'))}</button>
+        <a class="btn btn-primary btn-sm" data-compare-go href="#/comparer">${escapeHtml(t('explore.compare'))}</a>
+        <span class="tray-hint">${escapeHtml(t('explore.compareHint'))}</span>
       </div>`;
 
     attachExplorerListeners();
@@ -862,6 +1637,9 @@
       case 'prix-desc':
         items.sort((a, b) => (getPriceValue(b) ?? -Infinity) - (getPriceValue(a) ?? -Infinity));
         break;
+      case 'confiance':
+        items.sort((a, b) => getTrustScore(b).score - getTrustScore(a).score || (b.rating || 0) - (a.rating || 0));
+        break;
       default:
         items.sort(
           (a, b) =>
@@ -885,7 +1663,7 @@
     if (hood) chips.push(chip('hood', hood));
     if (quick) {
       const quickFilter = QUICK_FILTERS.find((item) => item.id === quick);
-      if (quickFilter) chips.push(chip('quick', quickFilter.label));
+      if (quickFilter) chips.push(chip('quick', quickLabel(quickFilter)));
     }
     return chips.join('');
   }
@@ -901,17 +1679,19 @@
 
     const countEl = $('[data-results-count]');
     if (countEl) {
-      const label = count === 1 ? 'adresse trouvée' : 'adresses trouvées';
-      countEl.innerHTML = `<strong>${count}</strong> ${label}${q ? ` pour « ${escapeHtml(q)} »` : ''}${cat ? ` · ${escapeHtml(getCategory(cat).label)}` : ''}`;
+      const label = count === 1 ? t('explore.results.one') : t('explore.results.many');
+      const forQuery = q ? ` ${t('explore.results.for', { q })}` : '';
+      const forCat = cat ? ` · ${escapeHtml(catLabel(getCategory(cat)))}` : '';
+      countEl.innerHTML = `<strong>${count}</strong> ${escapeHtml(label)}${escapeHtml(forQuery)}${forCat}`;
     }
 
     resultsGrid.innerHTML = count
       ? listingGrid(items)
       : emptyState({
-          title: 'Aucune adresse trouvée',
-          text: 'Essayez un autre mot-clé, changez de quartier ou retirez un filtre. De nouvelles adresses arrivent régulièrement.',
+          title: t('explore.empty.title'),
+          text: t('explore.empty.text'),
           iconMarkup: ICONS.searchX,
-          action: `<button type="button" class="btn btn-primary" data-reset-filters>${ICONS.refresh} Réinitialiser les filtres</button>`,
+          action: `<button type="button" class="btn btn-primary" data-reset-filters>${ICONS.refresh} ${escapeHtml(t('explore.reset'))}</button>`,
         });
 
     const activeEl = $('[data-active-filters]');
@@ -953,6 +1733,7 @@
     }
 
     updateNearMeUI(count);
+    renderCompareTray();
 
     syncExplorerUrl();
   }
@@ -989,11 +1770,167 @@
     updateExplorerResults();
   }
 
+  /* --------------------------- Comparateur -------------------------------- */
+
+  function compareListings() {
+    return [...state.compare].map((id) => getListing(id)).filter(Boolean);
+  }
+
+  /** Met à jour la barre flottante et les boutons « Comparer » visibles. */
+  function renderCompareTray() {
+    const tray = $('[data-compare-tray]');
+    if (!tray) return;
+    const listings = compareListings();
+    tray.hidden = listings.length === 0;
+
+    const items = $('[data-compare-items]');
+    if (items) {
+      items.innerHTML = listings
+        .map(
+          (listing) => `<button type="button" class="compare-chip" data-compare-remove="${escapeHtml(listing.id)}"
+            title="${escapeHtml(t('compare.remove'))} — ${escapeHtml(listing.name)}">
+            ${escapeHtml(listing.name)} ${ICONS.x}
+          </button>`
+        )
+        .join('');
+    }
+
+    const go = $('[data-compare-go]');
+    if (go) {
+      go.href = `#/comparer?ids=${listings.map((listing) => listing.id).join(',')}`;
+      go.textContent = t('explore.compareSelected', { n: listings.length });
+      go.setAttribute('aria-disabled', String(listings.length < 2));
+    }
+  }
+
+  function syncCompareButtons(listingId) {
+    const active = state.compare.has(listingId);
+    $$(`[data-compare="${escapeSelector(listingId)}"]`).forEach((button) => {
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-pressed', String(active));
+      button.innerHTML = `${active ? ICONS.check : ICONS.compare}<span>${escapeHtml(active ? t('detail.compare') : t('explore.compare'))}</span>`;
+    });
+  }
+
+  function toggleCompare(listingId) {
+    if (!getListing(listingId)) return;
+    if (state.compare.has(listingId)) {
+      state.compare.delete(listingId);
+    } else {
+      if (state.compare.size >= 3) {
+        showToast(t('explore.compareMax'));
+        return;
+      }
+      state.compare.add(listingId);
+      recordHistory({ type: 'compare', id: listingId });
+    }
+    persistCompare();
+    syncCompareButtons(listingId);
+    renderCompareTray();
+    const count = state.compare.size;
+    showToast(
+      state.compare.has(listingId)
+        ? t('explore.compareAdded', { n: count })
+        : t('explore.compareRemoved')
+    );
+  }
+
+  function renderCompare(route) {
+    const ids = (route.params.get('ids') || '')
+      .split(',')
+      .map((id) => id.trim())
+      .filter((id, index, array) => id && array.indexOf(id) === index)
+      .slice(0, 3);
+    const listings = ids.map((id) => getListing(id)).filter(Boolean);
+    document.title = `${t('compare.title')} — BamaHub`;
+
+    if (listings.length < 2) {
+      $('#main').innerHTML = `<div class="container page">
+        ${emptyState({
+          title: t('compare.empty'),
+          text: t('explore.compareHint'),
+          iconMarkup: ICONS.compare,
+          action: `<a class="btn btn-primary" href="#/explorer">${ICONS.arrowLeft} ${escapeHtml(t('compare.back'))}</a>`,
+        })}
+      </div>`;
+      return;
+    }
+
+    const prices = listings.map((listing) => getPriceValue(listing)).filter((value) => value !== null);
+    const bestPrice = prices.length ? Math.min(...prices) : null;
+    const bestRating = Math.max(...listings.map((listing) => aggregateRating(listing).avg || 0));
+    const bestTrust = Math.max(...listings.map((listing) => getTrustScore(listing).score));
+
+    const row = (label, render) =>
+      `<tr><th scope="row">${escapeHtml(label)}</th>${listings
+        .map((listing) => `<td>${render(listing)}</td>`)
+        .join('')}</tr>`;
+
+    $('#main').innerHTML = `<div class="container page compare-page">
+      <a class="back-link" href="#/explorer">${ICONS.arrowLeft} ${escapeHtml(t('compare.back'))}</a>
+      <div class="page-head">
+        <h1 class="page-title">${escapeHtml(t('compare.title'))}</h1>
+        <p class="page-sub">${escapeHtml(t('compare.sub'))}</p>
+      </div>
+
+      <div class="table-scroll">
+        <table class="compare-table">
+          <thead>
+            <tr>
+              <th scope="col">${escapeHtml(t('compare.criteria'))}</th>
+              ${listings
+                .map((listing) => {
+                  const cat = getCategory(listing.category);
+                  return `<th scope="col">
+                    <div class="compare-head">
+                      <a href="#/adresse/${escapeHtml(listing.id)}">${escapeHtml(listing.name)}</a>
+                      <span>${escapeHtml(catLabel(cat))} · ${escapeHtml(listing.neighborhood || 'Bamako')}</span>
+                      <button type="button" class="compare-remove" data-compare-remove="${escapeHtml(listing.id)}">${ICONS.x} ${escapeHtml(t('compare.remove'))}</button>
+                    </div>
+                  </th>`;
+                })
+                .join('')}
+            </tr>
+          </thead>
+          <tbody>
+            ${row(t('compare.category'), (listing) => escapeHtml(catLabel(getCategory(listing.category))))}
+            ${row(t('compare.hood'), (listing) => escapeHtml(listing.neighborhood || 'Bamako'))}
+            ${row(t('compare.price'), (listing) => `<span class="${getPriceValue(listing) === bestPrice && bestPrice !== null ? 'best' : ''}">${priceMarkup(listing, { detailed: true })}</span>`)}
+            ${row(t('compare.rating'), (listing) => {
+              const { avg, count } = aggregateRating(listing);
+              return avg
+                ? `<span class="${avg === bestRating ? 'best' : ''}">${ICONS.star} ${formatRating(avg)} / 5</span><br><span class="muted">${escapeHtml(t('detail.reviewsCount', { n: formatNumber(count) }))}</span>`
+                : `<span class="muted">${escapeHtml(t('card.new'))}</span>`;
+            })}
+            ${row(t('compare.trust'), (listing) => {
+              const score = getTrustScore(listing).score;
+              return `<span class="${score === bestTrust ? 'best' : ''}">${escapeHtml(t('detail.trust.title'))} : ${score}/100</span>`;
+            })}
+            ${row(t('compare.distance'), (listing) => (distanceLabel(listing) ? escapeHtml(distanceLabel(listing)) : '—'))}
+            ${row(t('compare.hours'), (listing) => escapeHtml(listing.hours || t('detail.hoursUnknown')))}
+            ${row(t('compare.status'), (listing) => openBadge(listing, { withDetail: true }) || '—')}
+            ${row(t('compare.phone'), (listing) => (listing.phone ? `<a href="tel:${escapeHtml(listing.phone.replace(/[^\d+]/g, ''))}">${escapeHtml(listing.phone)}</a>` : '—'))}
+            ${row(t('compare.actions'), (listing) => `<div class="inline-actions">
+              <a class="btn btn-primary btn-sm" href="#/adresse/${escapeHtml(listing.id)}">${escapeHtml(t('compare.view'))}</a>
+              ${whatsappContactUrl(listing) ? `<a class="btn btn-whatsapp btn-sm" href="${escapeHtml(whatsappContactUrl(listing))}" target="_blank" rel="noopener">${ICONS.whatsapp} WhatsApp</a>` : ''}
+            </div>`)}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
   function attachExplorerListeners() {
     const qInput = $('#filter-q');
     qInput?.addEventListener('input', () => {
       state.filters.q = qInput.value;
       updateExplorerResults();
+      // L'historique n'enregistre que les recherches stabilisées (pas chaque lettre).
+      clearTimeout(state.searchHistoryTimer);
+      state.searchHistoryTimer = setTimeout(() => {
+        const value = qInput.value.trim();
+        if (value.length >= 2) recordHistory({ type: 'search', q: value });
+      }, 900);
     });
 
     $('[data-clear-search]')?.addEventListener('click', () => {
@@ -1133,10 +2070,326 @@
       .join('')}</ul>`;
   }
 
+
+  /* ------------------------ Avis : rendu et formulaires ------------------- */
+
+  function formatDate(dateString) {
+    if (!dateString) return '';
+    const date = new Date(`${dateString}T12:00:00`);
+    if (Number.isNaN(date.getTime())) return dateString;
+    return new Intl.DateTimeFormat('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }).format(date);
+  }
+
+  /** Rangée d'étoiles en SVG (pleines ou grisées). */
+  function starsRow(rating, className = 'review-stars') {
+    const stars = [1, 2, 3, 4, 5]
+      .map((step) => `<span class="${step <= Math.round(rating) ? '' : 'off'}">${ICONS.star}</span>`)
+      .join('');
+    return `<span class="${className}" aria-label="${escapeHtml(t('detail.review.starsLabel', { n: Math.round(rating) }))}">${stars}</span>`;
+  }
+
+  function reviewItemMarkup(review, listing) {
+    const initials = String(review.author || '?')
+      .split(/\s+/)
+      .map((part) => part[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase();
+    return `<article class="review-item${review.mine ? ' is-mine' : ''}${review.reported ? ' is-reported' : ''}" data-review-item="${escapeHtml(review.id)}">
+      <span class="review-avatar" aria-hidden="true">${escapeHtml(initials)}</span>
+      <div>
+        <div class="review-head">
+          <strong>${escapeHtml(review.author)}</strong>
+          ${review.verified ? `<span class="review-verified">${ICONS.check}${escapeHtml(t('detail.review.verified'))}</span>` : ''}
+          <span class="review-date">${escapeHtml(formatDate(review.date))}</span>
+        </div>
+        ${starsRow(review.rating)}
+        <p class="review-text"${review.lang === 'bm' ? ' lang="bm"' : ''}>${escapeHtml(review.text)}</p>
+        ${review.photo && imagesEnabled() ? `<img class="review-photo" src="${escapeHtml(review.photo)}" alt="${escapeHtml(t('detail.review.photoAlt', { author: review.author }))}" loading="lazy" decoding="async" />` : ''}
+        <div class="review-actions">
+          <button type="button" class="review-action" data-helpful="${escapeHtml(review.id)}" data-count="${Number(review.helpful) || 0}">
+            ${ICONS.sparkles}<span data-helpful-label>${escapeHtml(t('detail.review.helpful'))}${review.helpful ? ` (${review.helpful})` : ''}</span>
+          </button>
+          <button type="button" class="review-action is-warn" data-report-review="${escapeHtml(review.id)}" data-listing="${escapeHtml(listing.id)}"${review.reported ? ' disabled' : ''}>
+            ${ICONS.alert}${escapeHtml(review.reported ? t('detail.review.alreadyReported') : t('detail.review.report'))}
+          </button>
+        </div>
+      </div>
+    </article>`;
+  }
+
+  function reviewFormMarkup(listing) {
+    if (!state.session) {
+      return `<div class="review-login-note">
+        ${ICONS.info}<span>${escapeHtml(t('detail.review.login'))}</span>
+        <button type="button" class="btn btn-soft btn-sm" data-auth-open="login">${escapeHtml(t('auth.login'))}</button>
+      </div>`;
+    }
+    return `<form class="review-form" data-review-form data-listing="${escapeHtml(listing.id)}">
+      <h3>${escapeHtml(t('detail.review.write'))}</h3>
+      <div class="star-input" role="radiogroup" aria-label="${escapeHtml(t('detail.review.yourRating'))}" data-star-input>
+        ${[1, 2, 3, 4, 5]
+          .map(
+            (step) => `<button type="button" data-star="${step}" aria-label="${escapeHtml(t('detail.review.starsLabel', { n: step }))}" aria-checked="false" role="radio">${ICONS.star}</button>`
+          )
+          .join('')}
+        <input type="hidden" name="rating" value="0" data-rating-value />
+      </div>
+      <label class="sr-only" for="review-text-${escapeHtml(listing.id)}">${escapeHtml(t('detail.review.placeholder'))}</label>
+      <textarea id="review-text-${escapeHtml(listing.id)}" name="text" class="input" maxlength="600" required placeholder="${escapeHtml(t('detail.review.placeholder'))}"></textarea>
+      <div class="form-foot">
+        <label class="photo-btn">
+          ${ICONS.camera}<span>${escapeHtml(t('detail.review.addPhoto'))}</span>
+          <input type="file" accept="image/*" data-review-photo hidden />
+        </label>
+        <span class="photo-preview" data-photo-preview hidden></span>
+        <button class="btn btn-primary" type="submit">${escapeHtml(t('detail.review.submit'))}</button>
+      </div>
+    </form>`;
+  }
+
+  function reviewsPanelMarkup(listing) {
+    const reviews = reviewsFor(listing.id);
+    const { avg, count } = aggregateRating(listing);
+    const distribution = [5, 4, 3, 2, 1].map((note) => {
+      const total = reviews.filter((review) => Math.round(review.rating) === note).length;
+      return { note, total, pct: reviews.length ? Math.round((total / reviews.length) * 100) : 0 };
+    });
+
+    return `<section class="panel reviews-panel" id="avis" aria-labelledby="reviews-title">
+      <h2 class="panel-title" id="reviews-title">${ICONS.star} ${escapeHtml(t('detail.reviews'))}
+        <span class="pill pill-outline">${formatNumber(count)}</span>
+      </h2>
+
+      ${
+        avg
+          ? `<div class="review-summary">
+              <div class="review-score">
+                <span class="big">${formatRating(avg)}</span>
+                <span>
+                  ${starsRow(avg, 'stars')}
+                  <span class="count">${escapeHtml(t('detail.reviewsCount', { n: formatNumber(count) }))}</span>
+                </span>
+              </div>
+              <div class="rating-bars" aria-label="${escapeHtml(t('detail.review.distribution'))}">
+                <p class="settings-hint" style="margin:0 0 0.15rem">${escapeHtml(t('detail.review.shown', { n: reviews.length }))}</p>
+                ${distribution
+                  .map(
+                    (entry) => `<div class="rating-bar">
+                      <span>${entry.note}</span>
+                      <span class="bar"><span style="width:${entry.pct}%"></span></span>
+                      <span>${entry.pct}%</span>
+                    </div>`
+                  )
+                  .join('')}
+              </div>
+            </div>`
+          : ''
+      }
+
+      <div class="review-list">
+        ${
+          reviews.length
+            ? reviews.map((review) => reviewItemMarkup(review, listing)).join('')
+            : `<p class="review-login-note">${ICONS.info}${escapeHtml(t('detail.review.empty'))}</p>`
+        }
+      </div>
+
+      ${reviewFormMarkup(listing)}
+    </section>`;
+  }
+
+  /* ------------------- Confiance, promotions, offre du jour --------------- */
+
+  function trustPanelMarkup(listing) {
+    const trust = getTrustScore(listing);
+    const rows = [
+      { label: t('detail.trust.profile'), value: trust.profile, max: 45 },
+      { label: t('detail.trust.reviews'), value: trust.reviews, max: 35 },
+      { label: t('detail.trust.seniority'), value: trust.seniority, max: 20 },
+    ];
+    return `<section class="panel trust-panel" aria-labelledby="trust-title">
+      <h2 class="panel-title" id="trust-title">${ICONS.shield} ${escapeHtml(t('detail.trust.title'))}</h2>
+      <div class="trust-head">
+        <span class="trust-ring is-${trustTier(trust.score)}" style="--pct:${trust.score}"><span>${trust.score}</span></span>
+        <div>
+          <strong>${escapeHtml(t('detail.trust.sub'))}</strong>
+          <p>${escapeHtml(t('detail.trust.note'))}</p>
+        </div>
+      </div>
+      <div class="trust-bars">
+        ${rows
+          .map(
+            (row) => `<div class="trust-bar-row">
+              <span>${escapeHtml(row.label)}</span>
+              <span class="trust-track"><span class="trust-fill" style="width:${Math.round((row.value / row.max) * 100)}%"></span></span>
+              <strong>${row.value}/${row.max}</strong>
+            </div>`
+          )
+          .join('')}
+      </div>
+    </section>`;
+  }
+
+  function promoPanelMarkup(listing) {
+    const promo = promoFor(listing.id);
+    const canManage = Boolean(state.session);
+    if (!promo && !canManage) return '';
+    const qrPayload = promo ? `PROMO ${promo.code} — ${listing.name} — ${listingUrl(listing)}` : '';
+    return `<section class="panel promo-card" aria-labelledby="promo-title">
+      <div class="promo-top">
+        <span class="promo-icon">${ICONS.tag}</span>
+        <h2 id="promo-title">${escapeHtml(t('detail.promo.title'))}</h2>
+      </div>
+      ${
+        promo
+          ? `<p class="promo-title">${escapeHtml(promo.title)}</p>
+             ${promo.detail ? `<p class="promo-detail">${escapeHtml(promo.detail)}</p>` : ''}
+             <div class="coupon-row">
+               <span class="coupon-code">${escapeHtml(promo.code)}</span>
+               <button type="button" class="btn btn-soft btn-sm" data-copy="${escapeHtml(promo.code)}">${ICONS.share} ${escapeHtml(t('detail.promo.copy'))}</button>
+               ${qrSvg(qrPayload, { cellSize: 4, margin: 2, label: promo.code }) ? `<button type="button" class="btn btn-ghost btn-sm" data-toggle-coupon-qr>${ICONS.qr} ${escapeHtml(t('detail.promo.showQr'))}</button>` : ''}
+             </div>
+             <p class="coupon-expiry">${escapeHtml(t('detail.promo.expires', { date: formatDate(promo.expires) }))}</p>
+             <div class="coupon-qr" data-coupon-qr hidden>${qrSvg(qrPayload, { cellSize: 4, margin: 2, label: promo.code })}</div>
+             ${canManage ? `<button type="button" class="btn btn-danger-soft btn-sm" data-remove-promo="${escapeHtml(listing.id)}" style="margin-top:0.7rem">${escapeHtml(t('detail.promo.remove'))}</button>` : ''}`
+          : ''
+      }
+      ${
+        canManage
+          ? `<details class="promo-editor" style="margin-top:${promo ? '0.8rem' : '0'}">
+              <summary class="btn btn-soft btn-sm">${ICONS.plus} ${escapeHtml(t('detail.promo.create'))}</summary>
+              <form class="daily-form" data-promo-form data-listing="${escapeHtml(listing.id)}">
+                <div class="field"><label>${escapeHtml(t('detail.promo.formTitle'))}</label><input class="input" name="title" required maxlength="80" placeholder="-10 % sur le plat du jour" /></div>
+                <div class="field"><label>${escapeHtml(t('detail.promo.formCode'))}</label><input class="input" name="code" required maxlength="18" pattern="[A-Za-z0-9\\-]+" placeholder="BAOBAB10" /></div>
+                <div class="field"><label>${escapeHtml(t('detail.promo.formDetail'))}</label><input class="input" name="detail" maxlength="120" /></div>
+                <div class="field"><label>${escapeHtml(t('detail.promo.formExpires'))}</label><input class="input" type="date" name="expires" required /></div>
+                <p class="settings-hint">${escapeHtml(t('detail.promo.merchantHint'))}</p>
+                <div class="inline-actions"><button class="btn btn-primary btn-sm" type="submit">${escapeHtml(t('detail.promo.save'))}</button></div>
+              </form>
+            </details>`
+          : ''
+      }
+    </section>`;
+  }
+
+  function dailyOfferPanelMarkup(listing) {
+    const offer = dailyOfferFor(listing.id);
+    const seed = !offer && DAILY_OFFERS[listing.id] ? DAILY_OFFERS[listing.id] : null;
+    const current = offer || seed;
+    const canManage = Boolean(state.session);
+    return `<section class="panel" aria-labelledby="daily-title">
+      <h2 class="panel-title" id="daily-title">${ICONS.sparkle} ${escapeHtml(t('detail.daily.title'))}</h2>
+      ${
+        current
+          ? `<div class="daily-offer">
+              <span class="offer-icon">${ICONS.sparkle}</span>
+              <div class="offer-main">
+                <h3>${escapeHtml(current.title)}</h3>
+                ${current.description ? `<p>${escapeHtml(current.description)}</p>` : ''}
+                <p class="settings-hint">${escapeHtml(t('detail.daily.on'))}</p>
+              </div>
+              <span class="offer-amount">${formatMoney(current.price)}</span>
+            </div>`
+          : `<p class="settings-hint">${escapeHtml(t('detail.daily.none'))}</p>`
+      }
+      ${
+        canManage
+          ? `<details class="daily-editor" style="margin-top:0.8rem">
+              <summary class="btn btn-soft btn-sm">${ICONS.plus} ${escapeHtml(offer ? t('detail.daily.edit') : t('detail.daily.publish'))}</summary>
+              <form class="daily-form" data-daily-form data-listing="${escapeHtml(listing.id)}">
+                <div class="field"><label>${escapeHtml(t('detail.daily.title'))}</label><input class="input" name="title" required maxlength="80" value="${escapeHtml(offer?.title || '')}" /></div>
+                <div class="field"><label>${escapeHtml(t('detail.daily.price'))}</label><input class="input" type="number" name="price" min="0" step="100" required value="${escapeHtml(String(offer?.price || ''))}" /></div>
+                <div class="field"><label>${escapeHtml(t('detail.daily.desc'))}</label><input class="input" name="description" maxlength="140" value="${escapeHtml(offer?.description || '')}" /></div>
+                <p class="settings-hint">${escapeHtml(t('detail.daily.merchantHint'))}</p>
+                <div class="inline-actions">
+                  <button class="btn btn-primary btn-sm" type="submit">${escapeHtml(t('detail.daily.submit'))}</button>
+                  ${offer ? `<button class="btn btn-ghost btn-sm" type="button" data-remove-offer="${escapeHtml(listing.id)}">${escapeHtml(t('detail.daily.delete'))}</button>` : ''}
+                </div>
+              </form>
+            </details>`
+          : ''
+      }
+    </section>`;
+  }
+
+  function qrPanelMarkup(listing) {
+    const target = sharePageUrl(listing) || listingUrl(listing);
+    const svg = qrSvg(target, { cellSize: 4, margin: 2, label: `${listing.name} — BamaHub` });
+    if (!svg) return '';
+    return `<section class="panel qr-panel" aria-labelledby="qr-title">
+      <h2 class="panel-title" id="qr-title">${ICONS.qr} ${escapeHtml(t('detail.qr.title'))}</h2>
+      <div class="qr-block">
+        <div class="qr-preview">${svg}</div>
+        <div class="qr-info">
+          <h3>${escapeHtml(listing.name)}</h3>
+          <p>${escapeHtml(t('detail.qr.hint'))}</p>
+          <div class="inline-actions">
+            <button type="button" class="btn btn-soft btn-sm" data-print-qr="${escapeHtml(listing.id)}">${ICONS.printer} ${escapeHtml(t('detail.qr.print'))}</button>
+            <button type="button" class="btn btn-ghost btn-sm" data-copy="${escapeHtml(target)}">${ICONS.share} ${escapeHtml(t('detail.share'))}</button>
+          </div>
+        </div>
+      </div>
+    </section>`;
+  }
+
+  /** Affiche l'affiche vitrine dans #print-root puis lance l'impression. */
+  function printQrSheet(listing) {
+    const target = sharePageUrl(listing) || listingUrl(listing);
+    const svg = qrSvg(target, { cellSize: 6, margin: 3, label: `${listing.name} — BamaHub` });
+    if (!svg) {
+      showToast(t('detail.qr.fallback'));
+      return;
+    }
+    const promo = promoFor(listing.id);
+    const root = $('#print-root');
+    if (!root) return;
+    root.innerHTML = `<div class="qr-sheet">
+      <div class="sheet-brand">BamaHub · Bamako</div>
+      <h2>${escapeHtml(listing.name)}</h2>
+      <p class="sheet-cat">${escapeHtml(catLabel(getCategory(listing.category)))} · ${escapeHtml(listing.neighborhood || 'Bamako')}</p>
+      <div class="sheet-qr">${svg}</div>
+      <p class="sheet-cta">${escapeHtml(t('detail.qr.hint'))}</p>
+      <p class="sheet-address">${escapeHtml(listing.address)}<br />${escapeHtml(listing.phone || '')}</p>
+      ${promo ? `<span class="sheet-code">${escapeHtml(promo.code)}</span>` : ''}
+    </div>`;
+    document.body.classList.add('is-printing');
+    window.print();
+    // Nettoyage différé : le dialogue d'impression peut être bloquant (Chrome)
+    // ou asynchrone (Safari). On laisse donc le temps nécessaire puis on rend
+    // la page normale, sans dépendre d'un unique événement.
+    setTimeout(() => {
+      document.body.classList.remove('is-printing');
+      root.innerHTML = '';
+    }, 1500);
+  }
+
+  /* --------------------- Photos d'avis (compression) ---------------------- */
+
+  async function compressImage(file, { maxWidth = 900, quality = 0.72 } = {}) {
+    if (!file || !/^image\//.test(file.type || '')) return null;
+    let bitmap;
+    try {
+      bitmap = await createImageBitmap(file);
+    } catch (error) {
+      return null;
+    }
+    const scale = Math.min(1, maxWidth / bitmap.width);
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext('2d');
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close?.();
+    return canvas.toDataURL('image/jpeg', quality);
+  }
+
   function renderDetail(route) {
     const listing = getListing(route.segments[1]);
     if (!listing) {
-      renderNotFound('Cette adresse n’existe pas ou a été supprimée.', 'Adresse introuvable');
+      renderNotFound(t('detail.notFound'), t('notFound.title'));
       return;
     }
 
@@ -1146,7 +2399,15 @@
     const priceInfo = getPriceInfo(listing);
     const rawPhone = (listing.phone || '').replace(/[^\d+]/g, '');
     const waNumber = (listing.whatsapp || '').replace(/\D/g, '');
+    const rating = aggregateRating(listing);
+    const status = getOpenState(listing);
+    const waContact = whatsappContactUrl(listing);
+    const canManage = Boolean(state.session);
+    const compareActive = state.compare.has(listing.id);
     document.title = `${listing.name} — BamaHub`;
+
+    // Une fiche consultée nourrit les suggestions personnalisées.
+    recordHistory({ type: 'view', id: listing.id });
 
     // Champs spécifiques : textes longs dans des panneaux, le reste en fiches.
     const contentFields = cat.fields.filter((field) => {
@@ -1161,7 +2422,7 @@
 
     const infoPanel = factFields.length
       ? `<section class="panel">
-          <h2 class="panel-title">${ICONS.info} Informations</h2>
+          <h2 class="panel-title">${ICONS.info} ${escapeHtml(t('detail.info'))}</h2>
           <div class="fact-list">${factFields.map((field) => fieldFact(field, listing.fields[field.key])).join('')}</div>
         </section>`
       : '';
@@ -1182,10 +2443,10 @@
 
     $('#main').innerHTML = `
       <div class="container detail-page page">
-        <a class="back-link" href="${escapeHtml(state.lastExplorerHash || '#/explorer')}">${ICONS.arrowLeft} Retour aux adresses</a>
+        <a class="back-link" href="${escapeHtml(state.lastExplorerHash || '#/explorer')}">${ICONS.arrowLeft} ${escapeHtml(t('detail.back'))}</a>
         ${breadcrumbs([
-          { label: 'Accueil', href: '#/' },
-          { label: cat.label, href: explorerHash({ ...defaultFilters(), cat: cat.id }) },
+          { label: t('nav.home'), href: '#/' },
+          { label: catLabel(cat), href: explorerHash({ ...defaultFilters(), cat: cat.id }) },
           { label: listing.name, href: '#/adresse/' + listing.id },
         ])}
 
@@ -1194,23 +2455,26 @@
             <span class="detail-icon">${categoryIcon(cat)}</span>
             <div class="detail-heading">
               <div class="detail-badge-row">
-                <span class="pill pill-cat">${escapeHtml(cat.label)}</span>
-                ${statuses.map((status) => `<span class="pill pill-success pill-dot">${escapeHtml(status)}</span>`).join('')}
-                ${isNew(listing.createdAt) ? '<span class="pill pill-outline">Nouveau</span>' : ''}
-                ${listing.isCustom ? '<span class="pill pill-outline">Votre adresse</span>' : ''}
+                <span class="pill pill-cat">${escapeHtml(catLabel(cat))}</span>
+                ${statuses.map((badge) => `<span class="pill pill-success pill-dot">${escapeHtml(badge)}</span>`).join('')}
+                ${isNew(listing.createdAt) ? `<span class="pill pill-outline">${escapeHtml(t('card.new'))}</span>` : ''}
+                ${listing.isCustom ? `<span class="pill pill-outline">${escapeHtml(t('detail.yourAddress'))}</span>` : ''}
+                ${trustBadge(listing, { label: true })}
+                ${promoFor(listing.id) ? `<span class="promo-badge">${ICONS.tag}${escapeHtml(t('detail.promo.title'))}</span>` : ''}
               </div>
               <h1 class="detail-title">${escapeHtml(listing.name)}</h1>
               <div class="detail-rating">
                 ${
-                  listing.rating
-                    ? `<span class="rating-pill">${ICONS.star} ${formatRating(listing.rating)}</span>
-                       <span>${formatNumber(listing.reviews || 0)} avis</span>
+                  rating.avg
+                    ? `<span class="rating-pill">${ICONS.star} ${formatRating(rating.avg)}</span>
+                       <span>${escapeHtml(t('detail.reviewsCount', { n: formatNumber(rating.count) }))}</span>
                        <span aria-hidden="true">·</span>
                        <span>${escapeHtml((listing.subcategories || []).join(' · '))}</span>`
-                    : `<span class="pill pill-outline">Nouvelle adresse</span>
-                       <span>Aucun avis pour le moment</span>`
+                    : `<span class="pill pill-outline">${escapeHtml(t('detail.newAddress'))}</span>
+                       <span>${escapeHtml(t('detail.noReviews'))}</span>`
                 }
               </div>
+              ${status.status !== 'unknown' ? `<div class="detail-status-row">${openBadge(listing, { withDetail: true })}</div>` : ''}
               <p class="detail-loc">${ICONS.mapPin}
                 <span>${escapeHtml(listing.address)}${listing.neighborhood ? ` · ${escapeHtml(listing.neighborhood)}` : ''}</span>
               </p>
@@ -1236,22 +2500,41 @@
             <a class="btn btn-ghost" href="${wazeUrl(listing)}" target="_blank" rel="noopener">
               ${ICONS.navigation}<span>Waze</span>
             </a>
-            <a class="btn btn-whatsapp" href="${whatsappShareUrl(listing)}" target="_blank" rel="noopener">
-              ${ICONS.whatsapp}<span>Partager sur WhatsApp</span>
-            </a>
+            <button type="button" class="btn btn-ghost compare-btn-hero${compareActive ? ' is-active' : ''}" data-compare="${escapeHtml(listing.id)}" aria-pressed="${compareActive}">
+              ${compareActive ? ICONS.check : ICONS.compare}<span>${escapeHtml(t('detail.compare'))}</span>
+            </button>
           </div>
+
+          ${
+            waContact
+              ? `<a class="detail-wa-cta" href="${escapeHtml(waContact)}" target="_blank" rel="noopener">
+                  <span class="wa-icon">${ICONS.whatsapp}</span>
+                  <span>
+                    <strong>${escapeHtml(
+                      listing.category === 'restaurants'
+                        ? t('detail.whatsappOrder')
+                        : listing.category === 'hotels'
+                          ? t('detail.whatsappBook')
+                          : t('detail.whatsapp')
+                    )}</strong>
+                    <small>${escapeHtml(whatsappMessage(listing))}</small>
+                  </span>
+                  ${ICONS.arrowRight}
+                </a>`
+              : ''
+          }
         </header>
 
         <div class="detail-layout">
           <div class="detail-main">
             <section class="panel">
-              <h2 class="panel-title">${ICONS.info} À propos</h2>
+              <h2 class="panel-title">${ICONS.info} ${escapeHtml(t('detail.about'))}</h2>
               <div class="prose">
                 ${String(listing.description || '')
                   .split('\n')
                   .filter(Boolean)
                   .map((paragraph) => `<p>${escapeHtml(paragraph)}</p>`)
-                  .join('') || '<p>Cette adresse n’a pas encore de description.</p>'}
+                  .join('') || `<p>${escapeHtml(t('card.noDescription'))}</p>`}
               </div>
               ${
                 listing.subcategories?.length
@@ -1264,24 +2547,27 @@
 
             ${contentPanels}
             ${infoPanel}
+            ${trustPanelMarkup(listing)}
+            ${promoPanelMarkup(listing)}
+            ${dailyOfferPanelMarkup(listing)}
 
             <section class="panel">
-              <h2 class="panel-title">${ICONS.mapPin} Localisation</h2>
+              <h2 class="panel-title">${ICONS.mapPin} ${escapeHtml(t('detail.location'))}</h2>
               <div class="fact-list">
-                <div class="fact"><span class="fact-label">Quartier</span><span class="fact-value">${escapeHtml(listing.neighborhood || 'Bamako')}</span></div>
-                <div class="fact"><span class="fact-label">Adresse</span><span class="fact-value">${escapeHtml(listing.address)}</span></div>
+                <div class="fact"><span class="fact-label">${escapeHtml(t('detail.hood'))}</span><span class="fact-value">${escapeHtml(listing.neighborhood || 'Bamako')}</span></div>
+                <div class="fact"><span class="fact-label">${escapeHtml(t('detail.address'))}</span><span class="fact-value">${escapeHtml(listing.address)}</span></div>
                 ${
                   listing.landmark
-                    ? `<div class="fact"><span class="fact-label">Repère</span><span class="fact-value">${escapeHtml(listing.landmark)}</span></div>`
+                    ? `<div class="fact"><span class="fact-label">${escapeHtml(t('detail.landmark'))}</span><span class="fact-value">${escapeHtml(listing.landmark)}</span></div>`
                     : ''
                 }
               </div>
-              <div id="detail-map" class="detail-map" role="application" aria-label="Carte de ${escapeHtml(listing.name)}"></div>
+              <div id="detail-map" class="detail-map" role="application" aria-label="${escapeHtml(t('detail.location'))} — ${escapeHtml(listing.name)}"></div>
               <div class="location-actions">
                 <a class="btn btn-soft" href="${googlePlaceUrl(listing)}" target="_blank" rel="noopener">${ICONS.mapPin} Google Maps</a>
-                <a class="btn btn-soft" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">${ICONS.route} Itinéraire</a>
+                <a class="btn btn-soft" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">${ICONS.route} ${escapeHtml(t('detail.itinerary'))}</a>
                 <a class="btn btn-soft" href="${wazeUrl(listing)}" target="_blank" rel="noopener">${ICONS.navigation} Waze</a>
-                <a class="btn btn-soft is-whatsapp" href="${whatsappShareUrl(listing)}" target="_blank" rel="noopener">${ICONS.whatsapp} Partager la position</a>
+                <a class="btn btn-soft is-whatsapp" href="${whatsappShareUrl(listing)}" target="_blank" rel="noopener">${ICONS.whatsapp} ${escapeHtml(t('detail.sharePosition'))}</a>
               </div>
             </section>
           </div>
@@ -1293,48 +2579,51 @@
                   ? `<div class="price-block">
                       <span class="price-caption">${escapeHtml(priceInfo.field.label)}</span>
                       <div class="price-main">${priceMarkup(listing, { detailed: true })}</div>
-                      <p class="price-hint">Tarif indicatif — à confirmer auprès de l’établissement.</p>
+                      <p class="price-hint">${escapeHtml(t('detail.priceHint'))}</p>
                     </div>`
                   : ''
               }
 
               <div class="contact-list">
-                ${listing.phone ? `<div class="contact-row">${ICONS.phone}<div><span class="contact-label">Téléphone</span><a class="contact-value" href="tel:${escapeHtml(rawPhone)}">${escapeHtml(listing.phone)}</a></div></div>` : ''}
+                ${listing.phone ? `<div class="contact-row">${ICONS.phone}<div><span class="contact-label">${escapeHtml(t('detail.phone'))}</span><a class="contact-value" href="tel:${escapeHtml(rawPhone)}">${escapeHtml(listing.phone)}</a></div></div>` : ''}
                 ${waNumber ? `<div class="contact-row">${ICONS.whatsapp}<div><span class="contact-label">WhatsApp</span><a class="contact-value" href="https://wa.me/${escapeHtml(waNumber)}" target="_blank" rel="noopener">${escapeHtml(listing.phone || `+${waNumber}`)}</a></div></div>` : ''}
-                <div class="contact-row">${ICONS.clock}<div><span class="contact-label">Horaires</span><span class="contact-value">${escapeHtml(listing.hours || 'Horaires non communiqués')}</span></div></div>
-                <div class="contact-row">${ICONS.mapPin}<div><span class="contact-label">Adresse</span><span class="contact-value">${escapeHtml(listing.address)}</span></div></div>
+                <div class="contact-row">${ICONS.clock}<div><span class="contact-label">${escapeHtml(t('detail.hours'))}</span><span class="contact-value">${escapeHtml(listing.hours || t('detail.hoursUnknown'))}</span></div></div>
+                <div class="contact-row">${ICONS.mapPin}<div><span class="contact-label">${escapeHtml(t('detail.address'))}</span><span class="contact-value">${escapeHtml(listing.address)}</span></div></div>
               </div>
 
               <div class="contact-actions">
-                ${listing.phone ? `<a class="btn btn-primary btn-block" href="tel:${escapeHtml(rawPhone)}">${ICONS.phone} Appeler</a>` : ''}
-                ${waNumber ? `<a class="btn btn-ghost btn-block" href="https://wa.me/${escapeHtml(waNumber)}" target="_blank" rel="noopener">${ICONS.whatsapp} Écrire sur WhatsApp</a>` : ''}
-                <a class="btn btn-ghost btn-block" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">${ICONS.route} Itinéraire Google</a>
-                <a class="btn btn-ghost btn-block" href="${wazeUrl(listing)}" target="_blank" rel="noopener">${ICONS.navigation} Itinéraire Waze</a>
+                ${listing.phone ? `<a class="btn btn-primary btn-block" href="tel:${escapeHtml(rawPhone)}">${ICONS.phone} ${escapeHtml(t('detail.call'))}</a>` : ''}
+                ${waContact ? `<a class="btn btn-ghost btn-block" href="${escapeHtml(waContact)}" target="_blank" rel="noopener">${ICONS.whatsapp} ${escapeHtml(t('detail.whatsapp'))}</a>` : ''}
+                <a class="btn btn-ghost btn-block" href="${googleMapsUrl(listing)}" target="_blank" rel="noopener">${ICONS.route} ${escapeHtml(t('detail.google'))}</a>
+                <a class="btn btn-ghost btn-block" href="${wazeUrl(listing)}" target="_blank" rel="noopener">${ICONS.navigation} ${escapeHtml(t('detail.waze'))}</a>
               </div>
 
               ${
                 listing.isCustom
-                  ? `<button type="button" class="btn btn-danger-soft btn-block" style="margin-top:0.7rem" data-delete-listing="${escapeHtml(listing.id)}" data-name="${escapeHtml(listing.name)}">${ICONS.trash} Supprimer cette adresse</button>`
+                  ? `<button type="button" class="btn btn-danger-soft btn-block" style="margin-top:0.7rem" data-delete-listing="${escapeHtml(listing.id)}" data-name="${escapeHtml(listing.name)}">${ICONS.trash} ${escapeHtml(t('detail.delete'))}</button>`
                   : ''
               }
             </div>
 
             <div class="listing-count-note">
-              <span>${listing.isCustom ? 'Adresse ajoutée par vous' : 'Adresse partagée par la communauté'}</span>
-              <strong>${formatNumber(listing.reviews || 0)} avis</strong>
+              <span>${escapeHtml(listing.isCustom ? t('detail.addedByYou') : t('detail.community'))}</span>
+              <strong>${escapeHtml(t('detail.reviewsCount', { n: formatNumber(rating.count) }))}</strong>
             </div>
           </aside>
         </div>
+
+        ${reviewsPanelMarkup(listing)}
+        ${qrPanelMarkup(listing)}
 
         ${
           similar.length
             ? `<section class="section" aria-labelledby="similar-title">
                 <div class="section-head">
                   <div>
-                    <span class="eyebrow">Dans la même catégorie</span>
-                    <h2 id="similar-title">Adresses similaires</h2>
+                    <span class="eyebrow">${escapeHtml(t('detail.sameCategory'))}</span>
+                    <h2 id="similar-title">${escapeHtml(t('detail.similar'))}</h2>
                   </div>
-                  <a class="section-link" href="${explorerHash({ ...defaultFilters(), cat: cat.id })}">Tout voir ${ICONS.arrowRight}</a>
+                  <a class="section-link" href="${explorerHash({ ...defaultFilters(), cat: cat.id })}">${escapeHtml(t('home.all'))} ${ICONS.arrowRight}</a>
                 </div>
                 ${listingGrid(similar)}
               </section>`
@@ -1503,12 +2792,12 @@
     $('#main').innerHTML = `
       <div class="container form-page page">
         ${breadcrumbs([
-          { label: 'Accueil', href: '#/' },
-          { label: 'Ajouter une adresse', href: '#/ajouter' },
+          { label: t('nav.home'), href: '#/' },
+          { label: t('add.title'), href: '#/ajouter' },
         ])}
         <div class="page-head" style="padding-top:0.4rem">
-          <h1 class="page-title">Ajouter une adresse</h1>
-          <p class="page-sub">Faites connaître votre commerce ou une adresse utile du quartier. L’ajout est gratuit et prend moins de deux minutes.</p>
+          <h1 class="page-title">${escapeHtml(t('add.title'))}</h1>
+          <p class="page-sub">${escapeHtml(t('add.subtitle'))}</p>
         </div>
 
         <div class="form-layout">
@@ -1517,30 +2806,30 @@
               <div class="form-section-head">
                 <span class="form-step">1</span>
                 <div>
-                  <h2>Identité de l’adresse</h2>
+                  <h2>${escapeHtml(t('add.identite'))}</h2>
                   <p>Le nom, la catégorie et les spécialités de votre commerce.</p>
                 </div>
               </div>
 
               <div class="form-grid">
                 <div class="field span-2">
-                  <label for="field-name">Nom de l’adresse <span class="req" aria-hidden="true">*</span></label>
+                  <label for="field-name">${escapeHtml(t('add.name'))} <span class="req" aria-hidden="true">*</span></label>
                   <input class="input" id="field-name" name="name" type="text" required maxlength="80" value="${escapeHtml(draft.name)}" placeholder="Ex. Le Baobab, Pharmacie du Carrefour…" />
-                  <span class="hint">Le nom tel qu’il apparaîtra dans l’annuaire.</span>
+                  <span class="hint">${escapeHtml(t('add.nameHint'))}</span>
                 </div>
 
                 <div class="field span-2">
-                  <label for="field-category">Catégorie principale <span class="req" aria-hidden="true">*</span></label>
+                  <label for="field-category">${escapeHtml(t('add.categoryLabel'))} <span class="req" aria-hidden="true">*</span></label>
                   <select class="select" id="field-category" name="category" required>
                     ${CATEGORIES.map(
                       (category) =>
-                        `<option value="${category.id}"${draft.category === category.id ? ' selected' : ''}>${escapeHtml(category.label)}</option>`
+                        `<option value="${category.id}"${draft.category === category.id ? ' selected' : ''}>${escapeHtml(catLabel(category))}</option>`
                     ).join('')}
                   </select>
                 </div>
 
                 <div class="field span-2">
-                  <span class="field-label">Sous-catégories <span class="hint">(facultatif, plusieurs choix possibles)</span></span>
+                  <span class="field-label">${escapeHtml(t('add.subcategories'))} <span class="hint">(${escapeHtml(t('add.optional'))}, ${escapeHtml(t('add.multiple'))})</span></span>
                   <div class="subcategory-options">
                     ${cat.subcategories
                       .map(
@@ -1559,16 +2848,16 @@
               <div class="form-section-head">
                 <span class="form-step">2</span>
                 <div>
-                  <h2>Localisation &amp; contact</h2>
+                  <h2>${escapeHtml(t('add.localisation'))}</h2>
                   <p>Pour que les habitants puissent vous trouver et vous appeler.</p>
                 </div>
               </div>
 
               <div class="form-grid">
                 <div class="field">
-                  <label for="field-neighborhood">Quartier <span class="req" aria-hidden="true">*</span></label>
+                  <label for="field-neighborhood">${escapeHtml(t('add.hood'))} <span class="req" aria-hidden="true">*</span></label>
                   <select class="select" id="field-neighborhood" name="neighborhood" required>
-                    <option value="">Choisir un quartier…</option>
+                    <option value="">${escapeHtml(t('add.chooseHood'))}</option>
                     ${NEIGHBORHOODS.map(
                       (hood) =>
                         `<option value="${escapeHtml(hood)}"${draft.neighborhood === hood ? ' selected' : ''}>${escapeHtml(hood)}</option>`
@@ -1577,25 +2866,25 @@
                 </div>
 
                 <div class="field">
-                  <label for="field-phone">Téléphone <span class="req" aria-hidden="true">*</span></label>
+                  <label for="field-phone">${escapeHtml(t('add.phone'))} <span class="req" aria-hidden="true">*</span></label>
                   <input class="input" id="field-phone" name="phone" type="tel" required pattern="[0-9+\-. ]{8,24}" title="Au moins 8 chiffres, ex. +223 66 12 34 56" value="${escapeHtml(draft.phone)}" placeholder="+223 66 12 34 56" />
                 </div>
 
                 <div class="field span-2">
-                  <label for="field-address">Adresse précise <span class="req" aria-hidden="true">*</span></label>
+                  <label for="field-address">${escapeHtml(t('add.addressLabel'))} <span class="req" aria-hidden="true">*</span></label>
                   <input class="input" id="field-address" name="address" type="text" required maxlength="140" value="${escapeHtml(draft.address)}" placeholder="Rue, repère, immeuble…" />
                   <span class="hint">Rue, numéro de porte, immeuble ou indication utile.</span>
                 </div>
 
                 <div class="field span-2">
-                  <label for="field-landmark">Repère <span class="hint">(facultatif)</span></label>
+                  <label for="field-landmark">${escapeHtml(t('add.landmark'))} <span class="hint">(${escapeHtml(t('add.optional'))})</span></label>
                   <input class="input" id="field-landmark" name="landmark" type="text" maxlength="120" value="${escapeHtml(draft.landmark || '')}" placeholder="Ex. en face de la Pharmacie du Carrefour, à côté de la mosquée…" />
                   <span class="hint">Beaucoup de rues de Bamako ne portent pas de nom : un repère connu est souvent plus utile que l’adresse.</span>
                 </div>
 
                 <div class="field span-2">
                   <div class="map-field-head">
-                    <span class="field-label">Position exacte sur la carte <span class="hint">(facultatif, recommandé)</span></span>
+                    <span class="field-label">${escapeHtml(t('add.position'))} <span class="hint">(${escapeHtml(t('add.optional'))})</span></span>
                     <button type="button" class="btn btn-soft btn-sm" data-form-geolocate>
                       ${ICONS.crosshair} Ma position
                     </button>
@@ -1605,17 +2894,17 @@
                 </div>
 
                 <div class="field">
-                  <label for="field-whatsapp">WhatsApp <span class="hint">(facultatif)</span></label>
+                  <label for="field-whatsapp">WhatsApp <span class="hint">(${escapeHtml(t('add.optional'))})</span></label>
                   <input class="input" id="field-whatsapp" name="whatsapp" type="tel" pattern="[0-9+\-. ]{8,24}" title="Numéro WhatsApp avec indicatif, ex. +223 66 12 34 56" value="${escapeHtml(draft.whatsapp)}" placeholder="+223 66 12 34 56" />
                 </div>
 
                 <div class="field">
-                  <label for="field-hours">Horaires <span class="hint">(facultatif)</span></label>
+                  <label for="field-hours">${escapeHtml(t('add.hours'))} <span class="hint">(${escapeHtml(t('add.optional'))})</span></label>
                   <input class="input" id="field-hours" name="hours" type="text" maxlength="80" value="${escapeHtml(draft.hours)}" placeholder="Ex. Lun – Sam · 8h – 19h" />
                 </div>
 
                 <div class="field span-2">
-                  <label for="field-description">Description <span class="hint">(facultatif)</span></label>
+                  <label for="field-description">${escapeHtml(t('add.description'))} <span class="hint">(${escapeHtml(t('add.optional'))})</span></label>
                   <textarea class="textarea" id="field-description" name="description" rows="4" maxlength="600" placeholder="Présentez votre commerce, vos spécialités, ce qui vous distingue…">${escapeHtml(draft.description)}</textarea>
                 </div>
               </div>
@@ -1625,7 +2914,7 @@
               <div class="form-section-head">
                 <span class="form-step">3</span>
                 <div>
-                  <h2>${escapeHtml(cat.label)} — détails</h2>
+                  <h2>${escapeHtml(t('add.details', { cat: catLabel(cat) }))}</h2>
                   <p>Ces champs s’adaptent automatiquement à la catégorie choisie.</p>
                 </div>
               </div>
@@ -1637,7 +2926,7 @@
 
             <div class="form-actions">
               <a class="btn btn-ghost" href="#/explorer">Annuler</a>
-              <button class="btn btn-primary" type="submit">${ICONS.plus} Publier l’adresse</button>
+              <button class="btn btn-primary" type="submit">${ICONS.plus} ${escapeHtml(t('add.publish'))}</button>
             </div>
             <p class="form-note">En publiant, vous confirmez que les informations sont exactes. Cet annuaire est une démonstration : les données restent dans votre navigateur.</p>
           </form>
@@ -1645,7 +2934,7 @@
           <aside class="form-preview">
             <div class="preview-wrap">
               <div class="preview-head">
-                <h2>${ICONS.sparkles} Aperçu en direct</h2>
+                <h2>${ICONS.sparkles} ${escapeHtml(t('add.previewTitle'))}</h2>
                 <span class="pill pill-brand">Nouveau</span>
               </div>
               <div id="form-preview-card"></div>
@@ -1776,34 +3065,30 @@
       .map((id) => getListing(id))
       .filter(Boolean);
 
-    document.title = 'Mes favoris — BamaHub';
+    document.title = `${t('fav.title')} — BamaHub`;
 
     $('#main').innerHTML = `
       <div class="container page" style="padding-top:1.6rem;padding-bottom:2rem">
         ${breadcrumbs([
-          { label: 'Accueil', href: '#/' },
-          { label: 'Favoris', href: '#/favoris' },
+          { label: t('nav.home'), href: '#/' },
+          { label: t('nav.favorites'), href: '#/favoris' },
         ])}
         <div class="favorites-head">
           <div>
-            <h1 class="page-title">Mes favoris</h1>
-            <p class="page-sub">${
-              favorites.length
-                ? `${favorites.length} adresse${favorites.length > 1 ? 's' : ''} enregistrée${favorites.length > 1 ? 's' : ''} dans ce navigateur.`
-                : 'Retrouvez ici les adresses que vous gardez sous la main.'
-            }</p>
+            <h1 class="page-title">${escapeHtml(t('fav.title'))}</h1>
+            <p class="page-sub">${escapeHtml(favorites.length ? t('fav.count', { n: favorites.length }) : t('fav.sub'))}</p>
           </div>
-          ${favorites.length ? `<button type="button" class="btn btn-danger-soft btn-sm" data-clear-favorites>${ICONS.trash} Tout effacer</button>` : ''}
+          ${favorites.length ? `<button type="button" class="btn btn-danger-soft btn-sm" data-clear-favorites>${ICONS.trash} ${escapeHtml(t('fav.clear'))}</button>` : ''}
         </div>
 
         ${
           favorites.length
             ? listingGrid(favorites)
             : emptyState({
-                title: 'Votre carnet est encore vide',
-                text: 'Touchez le cœur sur une adresse pour l’enregistrer. Vos favoris restent disponibles dans ce navigateur, sans compte à créer.',
+                title: t('fav.empty.title'),
+                text: t('fav.empty.text'),
                 iconMarkup: ICONS.heart,
-                action: `<a class="btn btn-primary" href="#/explorer">${ICONS.search} Explorer les adresses</a>`,
+                action: `<a class="btn btn-primary" href="#/explorer">${ICONS.search} ${escapeHtml(t('nav.explore'))}</a>`,
               })
         }
       </div>`;
@@ -1886,6 +3171,10 @@
       case '/favoris':
         setActiveNav('favorites');
         renderFavorites();
+        break;
+      case '/comparer':
+        setActiveNav('explore');
+        renderCompare(route);
         break;
       case '/ajouter':
         setActiveNav('add');
@@ -2718,11 +4007,11 @@
             <p class="auth-account-mail">${escapeHtml(account.email)}</p>
           </div>
           <div class="auth-account-actions">
-            <a class="btn btn-primary btn-block" href="#/favoris" data-auth-close>${ICONS.heart} Mes favoris</a>
-            <a class="btn btn-ghost btn-block" href="#/ajouter" data-auth-close>${ICONS.plus} Ajouter une adresse</a>
-            <button type="button" class="btn btn-danger-soft btn-block" data-auth-signout>Se déconnecter</button>
+            <a class="btn btn-primary btn-block" href="#/favoris" data-auth-close>${ICONS.heart} ${escapeHtml(t('auth.favorites'))}</a>
+            <a class="btn btn-ghost btn-block" href="#/ajouter" data-auth-close>${ICONS.plus} ${escapeHtml(t('auth.addAddress'))}</a>
+            <button type="button" class="btn btn-danger-soft btn-block" data-auth-signout>${escapeHtml(t('auth.logout'))}</button>
           </div>
-          <p class="auth-note">${ICONS.info} Compte de démonstration stocké uniquement dans ce navigateur.</p>
+          <p class="auth-note">${ICONS.info} ${escapeHtml(t('auth.accountNote'))}</p>
         </div>`;
     }
 
@@ -2730,51 +4019,49 @@
     return `
       <div class="auth-form">
         <div>
-          <h2 class="auth-title" id="auth-title">${register ? 'Créer un compte' : 'Content de vous revoir'}</h2>
+          <h2 class="auth-title" id="auth-title">${escapeHtml(register ? t('auth.signup') : t('auth.loginTitle'))}</h2>
           <p class="auth-sub" id="auth-subtitle">
-            ${register
-              ? 'Enregistrez vos adresses favorites et retrouvez-les à chaque visite.'
-              : 'Connectez-vous pour retrouver vos favoris et vos adresses.'}
+            ${escapeHtml(register ? t('auth.signupSub') : t('auth.loginSub'))}
           </p>
         </div>
 
         <form class="auth-form" data-auth-form="${register ? 'register' : 'login'}" novalidate>
           ${register
             ? `<div class="field">
-                 <label for="auth-name">Nom complet</label>
+                 <label for="auth-name">${escapeHtml(t('auth.name'))}</label>
                  <input class="input" id="auth-name" name="name" type="text" autocomplete="name" required maxlength="60" placeholder="Ex. Awa Traoré" />
                </div>`
             : ''}
           <div class="field">
-            <label for="auth-email">Adresse e-mail</label>
+            <label for="auth-email">${escapeHtml(t('auth.email'))}</label>
             <input class="input" id="auth-email" name="email" type="email" autocomplete="email" required placeholder="vous@exemple.ml" />
           </div>
           <div class="field">
-            <label for="auth-password">Mot de passe</label>
+            <label for="auth-password">${escapeHtml(t('auth.password'))}</label>
             <input class="input" id="auth-password" name="password" type="password"
               autocomplete="${register ? 'new-password' : 'current-password'}" required minlength="6"
-              placeholder="6 caractères minimum" />
+              placeholder="${escapeHtml(t('auth.passwordHint'))}" />
           </div>
           <p class="auth-error" data-auth-error role="alert"></p>
           <button class="btn btn-primary btn-block" type="submit">
-            ${register ? 'Créer mon compte' : 'Se connecter'}
+            ${escapeHtml(register ? t('auth.signupAction') : t('auth.loginAction'))}
           </button>
         </form>
 
         ${register
           ? ''
-          : `<p class="auth-switch">Pas encore de compte ?
-               <button type="button" data-auth-tab="register">Créer un compte</button>
+          : `<p class="auth-switch">${escapeHtml(t('auth.switchRegister'))}
+               <button type="button" data-auth-tab="register">${escapeHtml(t('auth.signup'))}</button>
              </p>`}
         ${register
-          ? `<p class="auth-switch">Déjà inscrit ?
-               <button type="button" data-auth-tab="login">Se connecter</button>
+          ? `<p class="auth-switch">${escapeHtml(t('auth.switchLogin'))}
+               <button type="button" data-auth-tab="login">${escapeHtml(t('auth.login'))}</button>
              </p>`
           : `<p class="auth-switch">Compte de démonstration :
                <button type="button" data-auth-demo>remplir automatiquement</button>
              </p>`}
 
-        <p class="auth-note">${ICONS.info} Démonstration : le compte reste dans ce navigateur, aucune donnée n'est envoyée.</p>
+        <p class="auth-note">${ICONS.info} ${escapeHtml(t('auth.note'))}</p>
       </div>`;
   }
 
@@ -2812,6 +4099,7 @@
     if (returnRoute) state.authReturnRoute = returnRoute;
 
     modal.hidden = false;
+    state.authOpen = true;
     document.body.classList.add('auth-open');
     document.body.style.overflow = 'hidden';
 
@@ -2831,11 +4119,12 @@
     if (!modal || modal.hidden) return;
 
     modal.hidden = true;
+    state.authOpen = false;
     document.body.classList.remove('auth-open');
-    document.body.style.overflow = '';
-    ['#main', '.site-header', '.site-footer', '.bottom-nav'].forEach((selector) => {
-      $(selector)?.removeAttribute('inert');
-    });
+    if (!state.settingsOpen) {
+      document.body.style.overflow = '';
+      setInertBackground(false);
+    }
 
     const routeIsAuth = state.route?.path === '/connexion' || state.route?.path === '/inscription';
     if (syncRoute && routeIsAuth) {
@@ -3098,17 +4387,20 @@
     }
   }
 
-  function shareListing(listingId) {
+  async function shareListing(listingId) {
     const listing = getListing(listingId);
     if (!listing) return;
-    const url = `${location.origin === 'null' ? '' : location.origin}${location.pathname}#/adresse/${listingId}`;
-    copyText(url).then((success) => {
-      showToast(
-        success
-          ? 'Lien de l’adresse copié dans le presse-papiers.'
-          : 'Impossible de copier le lien. Copiez l’adresse depuis la barre du navigateur.'
-      );
-    });
+    const url = sharePageUrl(listing) || listingUrl(listing);
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: listing.name, text: t('detail.share.text', { name: listing.name }), url });
+        return;
+      } catch (error) {
+        if (error?.name === 'AbortError') return;
+      }
+    }
+    const success = await copyText(url);
+    showToast(success ? t('detail.share.copied') : t('toast.error'));
   }
 
   function deleteCustomListing(listingId, name) {
@@ -3122,6 +4414,664 @@
     updateFavoritesCount();
     showToast(`« ${name} » a été supprimée.`);
     location.hash = '#/explorer';
+  }
+
+
+  /* ==========================================================================
+     12bis. Interactions v2 : langue, réglages, avis, promos, voix, QR
+     ========================================================================== */
+
+  /* ------------------------------ Langue ---------------------------------- */
+
+  function syncLangButton() {
+    const button = $('[data-lang-toggle]');
+    if (!button) return;
+    const lang = getLang();
+    const label = button.querySelector('[data-lang-label]');
+    if (label) label.textContent = lang === 'bm' ? 'BM' : 'FR';
+    const name = window.BamaHubI18n?.getName(lang) || 'Français';
+    button.setAttribute('aria-label', `${t('nav.language')} : ${name}`);
+    button.setAttribute('title', `${t('nav.language')} : ${name}`);
+  }
+
+  function changeLanguage(lang) {
+    if (!window.BamaHubI18n) return;
+    const changed = window.BamaHubI18n.setLang(lang);
+    syncLangButton();
+    syncSettingsUI();
+    renderRoute();
+    showToast(t('toast.language', { lang: window.BamaHubI18n.getName(changed) }));
+  }
+
+  function toggleLanguage() {
+    changeLanguage(getLang() === 'fr' ? 'bm' : 'fr');
+  }
+
+  /* ----------------------------- Paramètres -------------------------------- */
+
+  function syncSettingsUI() {
+    if (!window.BamaHubI18n) return;
+    const lang = getLang();
+    $$('[data-set-lang]').forEach((button) => {
+      button.setAttribute('aria-checked', String(button.dataset.setLang === lang));
+    });
+    $$('[data-set-datasaver]').forEach((button) => {
+      button.setAttribute('aria-checked', String(button.dataset.setDatasaver === state.dataSaver));
+    });
+    $$('[data-set-images]').forEach((button) => {
+      button.setAttribute('aria-checked', String(button.dataset.setImages === state.images));
+    });
+    const theme = readStorage(STORAGE.theme, null) || 'auto';
+    $$('[data-set-theme]').forEach((button) => {
+      button.setAttribute('aria-checked', String(button.dataset.setTheme === theme));
+    });
+    const modal = $('#settings-modal');
+    if (modal) modal.setAttribute('data-datasaver', dataSaverActive() ? 'on' : 'off');
+  }
+
+  function setInertBackground(inert) {
+    ['#main', '.site-header', '.site-footer', '.bottom-nav'].forEach((selector) => {
+      const element = $(selector);
+      if (!element) return;
+      if (inert) element.setAttribute('inert', '');
+      else element.removeAttribute('inert');
+    });
+  }
+
+  function openSettingsModal() {
+    const modal = $('#settings-modal');
+    if (!modal || !modal.hidden) return;
+    state.lastFocusedElement = document.activeElement;
+    state.settingsOpen = true;
+    syncSettingsUI();
+    modal.hidden = false;
+    document.body.classList.add('settings-open');
+    document.body.style.overflow = 'hidden';
+    setInertBackground(true);
+    $('.settings-dialog', modal)?.focus({ preventScroll: true });
+  }
+
+  function closeSettingsModal() {
+    const modal = $('#settings-modal');
+    if (!modal || modal.hidden) return;
+    modal.hidden = true;
+    state.settingsOpen = false;
+    document.body.classList.remove('settings-open');
+    document.body.style.overflow = '';
+    if (!state.authOpen) setInertBackground(false);
+    if (state.lastFocusedElement instanceof HTMLElement && document.contains(state.lastFocusedElement)) {
+      state.lastFocusedElement.focus({ preventScroll: true });
+    }
+  }
+
+  function setDataSaverPreference(value) {
+    if (!['auto', 'on', 'off'].includes(value)) return;
+    state.dataSaver = value;
+    writeStorage(STORAGE.dataSaver, value);
+    syncSettingsUI();
+    renderRoute();
+    const labels = { auto: t('settings.data.auto'), on: t('settings.data.on'), off: t('settings.data.off') };
+    showToast(t('toast.dataSaver', { state: labels[value] }));
+  }
+
+  function setImagesPreference(value) {
+    if (!['normal', 'none'].includes(value)) return;
+    state.images = value;
+    writeStorage(STORAGE.images, value);
+    syncSettingsUI();
+    renderRoute();
+    showToast(t('settings.saved'));
+  }
+
+  function setThemePreference(value) {
+    if (value === 'auto') {
+      try {
+        localStorage.removeItem(STORAGE.theme);
+      } catch (error) {
+        /* stockage indisponible */
+      }
+      const prefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+      applyTheme(prefersDark ? 'dark' : 'light', false);
+    } else {
+      applyTheme(value, true);
+    }
+    syncSettingsUI();
+  }
+
+  /* -------------------------------- Voix ----------------------------------- */
+
+  function startVoiceSearch(scope) {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      showToast(t('explore.voiceUnsupported'));
+      return;
+    }
+
+    if (state.voiceActive) {
+      state.voiceRecognition?.stop();
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'fr-FR';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+    recognition.continuous = false;
+    state.voiceRecognition = recognition;
+    state.voiceActive = true;
+    $$('[data-voice]').forEach((button) => button.classList.add('is-listening'));
+    showToast(t('explore.voiceListening'), { duration: 6000 });
+
+    recognition.onresult = (event) => {
+      const transcript = String(event.results?.[0]?.[0]?.transcript || '').trim();
+      if (!transcript) {
+        showToast(t('explore.voiceError'));
+        return;
+      }
+      if (scope === 'home') {
+        const input = $('#home-search');
+        if (input) input.value = transcript;
+        location.hash = `#/explorer?q=${encodeURIComponent(transcript)}`;
+      } else {
+        state.filters.q = transcript;
+        const input = $('#filter-q');
+        if (input) input.value = transcript;
+        updateExplorerResults();
+      }
+      recordHistory({ type: 'search', q: transcript });
+      showToast(t('explore.voiceDone', { q: transcript }));
+    };
+
+    recognition.onerror = (event) => {
+      if (event.error === 'aborted') return;
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        showToast(t('explore.voiceUnsupported'));
+      } else {
+        showToast(t('explore.voiceError'));
+      }
+    };
+
+    recognition.onend = () => {
+      state.voiceActive = false;
+      state.voiceRecognition = null;
+      $$('[data-voice]').forEach((button) => button.classList.remove('is-listening'));
+    };
+
+    try {
+      recognition.start();
+    } catch (error) {
+      state.voiceActive = false;
+      showToast(t('explore.voiceUnsupported'));
+    }
+  }
+
+  /* -------------------------------- Avis ----------------------------------- */
+
+  function handleReviewSubmit(form) {
+    if (!state.session) {
+      showToast(t('detail.review.login'));
+      return;
+    }
+    const listing = getListing(form.dataset.listing);
+    if (!listing) return;
+    const rating = Number(form.querySelector('[data-rating-value]')?.value || 0);
+    const text = (form.querySelector('textarea')?.value || '').trim();
+    if (!rating || !text) {
+      showToast(t('detail.review.required'));
+      return;
+    }
+
+    const photo =
+      state.reviewPhotoDraft?.listingId === listing.id ? state.reviewPhotoDraft.dataUrl : null;
+    const review = {
+      id: `r-${Date.now()}`,
+      author: state.session.name,
+      rating: Math.min(5, Math.max(1, rating)),
+      text: text.slice(0, 600),
+      date: todayISO(),
+      verified: true,
+      photo,
+      helpful: 0,
+    };
+    state.reviews[listing.id] = [review, ...(Array.isArray(state.reviews[listing.id]) ? state.reviews[listing.id] : [])];
+    if (!persistReviews()) showToast(t('toast.storage'));
+    state.reviewPhotoDraft = null;
+    showToast(t('detail.review.thanks'));
+    renderRoute();
+    requestAnimationFrame(() => {
+      $('.reviews-panel')?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    });
+  }
+
+  function openReportForm(button) {
+    const item = button.closest('.review-item');
+    if (!item) return;
+    const existing = item.querySelector('[data-report-form]');
+    if (existing) {
+      existing.hidden = !existing.hidden;
+      if (!existing.hidden) existing.querySelector('select')?.focus();
+      return;
+    }
+    const form = document.createElement('form');
+    form.className = 'review-form report-form';
+    form.setAttribute('data-report-form', '');
+    form.dataset.reviewId = button.dataset.reportReview;
+    form.dataset.listing = button.dataset.listing;
+    form.innerHTML = `<h3>${escapeHtml(t('detail.review.reportTitle'))}</h3>
+      <p class="settings-hint">${escapeHtml(t('detail.review.reportText'))}</p>
+      <label class="sr-only" for="report-reason-${escapeHtml(button.dataset.reportReview)}">${escapeHtml(t('detail.review.reportReason'))}</label>
+      <select class="select" name="reason" id="report-reason-${escapeHtml(button.dataset.reportReview)}">
+        <option value="fake">${escapeHtml(t('detail.review.reportFake'))}</option>
+        <option value="offensive">${escapeHtml(t('detail.review.reportOffensive'))}</option>
+        <option value="wrong">${escapeHtml(t('detail.review.reportWrong'))}</option>
+      </select>
+      <textarea class="input" name="note" rows="2" maxlength="240" placeholder="${escapeHtml(t('detail.review.reportReason'))}"></textarea>
+      <div class="inline-actions">
+        <button type="submit" class="btn btn-danger-soft btn-sm">${escapeHtml(t('detail.review.reportSend'))}</button>
+        <button type="button" class="btn btn-ghost btn-sm" data-report-cancel>${escapeHtml(t('common.cancel'))}</button>
+      </div>`;
+    item.appendChild(form);
+    form.querySelector('[data-report-cancel]')?.addEventListener('click', () => form.remove());
+    form.querySelector('select')?.focus();
+  }
+
+  function handleReportSubmit(form) {
+    const reviewId = form.dataset.reviewId;
+    if (!reviewId) return;
+    if (state.reports.some((report) => report.reviewId === reviewId)) {
+      showToast(t('detail.review.alreadyReported'));
+      return;
+    }
+    const data = new FormData(form);
+    state.reports.push({
+      reviewId,
+      listingId: form.dataset.listing,
+      reason: String(data.get('reason') || 'fake'),
+      note: String(data.get('note') || '').slice(0, 240),
+      at: Date.now(),
+    });
+    persistReports();
+    form.closest('.review-item')?.classList.add('is-reported');
+    const button = $(`[data-report-review="${escapeSelector(reviewId)}"]`);
+    if (button) {
+      button.disabled = true;
+      button.innerHTML = `${ICONS.alert}${escapeHtml(t('detail.review.alreadyReported'))}`;
+    }
+    form.remove();
+    showToast(t('detail.review.reportThanks'));
+  }
+
+  /* --------------------------- Promotions & offres ------------------------- */
+
+  function handlePromoSubmit(form) {
+    if (!state.session) {
+      showToast(t('auth.login'));
+      return;
+    }
+    const listing = getListing(form.dataset.listing);
+    if (!listing) return;
+    const data = new FormData(form);
+    const title = String(data.get('title') || '').trim();
+    const code = String(data.get('code') || '').trim().toUpperCase();
+    const expires = String(data.get('expires') || '').trim();
+    if (!title || !code || !expires) {
+      showToast(t('detail.review.required'));
+      return;
+    }
+    state.promos[listing.id] = {
+      title,
+      code,
+      detail: String(data.get('detail') || '').trim().slice(0, 140),
+      expires,
+    };
+    persistPromos();
+    showToast(t('detail.promo.saved'));
+    renderRoute();
+  }
+
+  function removePromo(listingId) {
+    if (!state.promos[listingId]) return;
+    delete state.promos[listingId];
+    persistPromos();
+    showToast(t('detail.promo.remove'));
+    renderRoute();
+  }
+
+  function handleDailyOfferSubmit(form) {
+    if (!state.session) {
+      showToast(t('auth.login'));
+      return;
+    }
+    const listing = getListing(form.dataset.listing);
+    if (!listing) return;
+    const data = new FormData(form);
+    const title = String(data.get('title') || '').trim();
+    const price = Number(data.get('price'));
+    if (!title || !Number.isFinite(price) || price < 0) {
+      showToast(t('detail.review.required'));
+      return;
+    }
+    state.offers[listing.id] = {
+      title,
+      price,
+      description: String(data.get('description') || '').trim().slice(0, 160),
+      date: todayISO(),
+    };
+    persistOffers();
+    showToast(t('detail.daily.saved'));
+    renderRoute();
+  }
+
+  function removeDailyOffer(listingId) {
+    if (!state.offers[listingId]) return;
+    delete state.offers[listingId];
+    persistOffers();
+    showToast(t('detail.daily.delete'));
+    renderRoute();
+  }
+
+  /* ------------------------- Badges d'ouverture ---------------------------- */
+
+  function refreshOpenBadges() {
+    $$('[data-open-badge]').forEach((badge) => {
+      const listing = getListing(badge.dataset.openBadge);
+      if (!listing) return;
+      const status = getOpenState(listing);
+      if (status.status === 'unknown') return;
+      badge.className = `open-badge is-${status.status}`;
+      const withDetail = badge.dataset.openDetail === 'true';
+      badge.innerHTML = `<span class="dot" aria-hidden="true"></span>${escapeHtml(status.label)}${
+        withDetail ? `<span class="open-detail">· ${escapeHtml(status.detail)}</span>` : ''
+      }`;
+      badge.title = status.detail;
+    });
+  }
+
+  /* ------------------------------ Événements ------------------------------- */
+
+  function bindV2Events() {
+    document.addEventListener('click', (event) => {
+      /* Langue et réglages */
+      if (event.target.closest('[data-lang-toggle]')) {
+        event.preventDefault();
+        toggleLanguage();
+        return;
+      }
+
+      const langButton = event.target.closest('[data-set-lang]');
+      if (langButton) {
+        event.preventDefault();
+        changeLanguage(langButton.dataset.setLang);
+        return;
+      }
+
+      if (event.target.closest('[data-settings-open]')) {
+        event.preventDefault();
+        openSettingsModal();
+        return;
+      }
+
+      if (event.target.closest('[data-settings-close]')) {
+        event.preventDefault();
+        closeSettingsModal();
+        return;
+      }
+
+      const dataSaverButton = event.target.closest('[data-set-datasaver]');
+      if (dataSaverButton) {
+        event.preventDefault();
+        setDataSaverPreference(dataSaverButton.dataset.setDatasaver);
+        return;
+      }
+
+      const imagesButton = event.target.closest('[data-set-images]');
+      if (imagesButton) {
+        event.preventDefault();
+        setImagesPreference(imagesButton.dataset.setImages);
+        return;
+      }
+
+      const themeButton = event.target.closest('[data-set-theme]');
+      if (themeButton) {
+        event.preventDefault();
+        setThemePreference(themeButton.dataset.setTheme);
+        return;
+      }
+
+      /* Recherche vocale */
+      const voiceButton = event.target.closest('[data-voice]');
+      if (voiceButton) {
+        event.preventDefault();
+        startVoiceSearch(voiceButton.dataset.voice === 'home' ? 'home' : 'explorer');
+        return;
+      }
+
+      /* Comparateur */
+      const compareButton = event.target.closest('[data-compare]');
+      if (compareButton) {
+        event.preventDefault();
+        toggleCompare(compareButton.dataset.compare);
+        return;
+      }
+
+      const compareRemove = event.target.closest('[data-compare-remove]');
+      if (compareRemove) {
+        event.preventDefault();
+        toggleCompare(compareRemove.dataset.compareRemove);
+        if (state.route?.path === '/comparer') {
+          const ids = [...state.compare];
+          location.hash = ids.length >= 2 ? `#/comparer?ids=${ids.join(',')}` : '#/explorer';
+        }
+        return;
+      }
+
+      if (event.target.closest('[data-compare-clear]')) {
+        event.preventDefault();
+        state.compare.clear();
+        persistCompare();
+        renderCompareTray();
+        if (state.route?.path === '/comparer') {
+          location.hash = '#/explorer';
+        } else {
+          $$('[data-compare]').forEach((button) => syncCompareButtons(button.dataset.compare));
+        }
+        return;
+      }
+
+      const compareGo = event.target.closest('[data-compare-go]');
+      if (compareGo) {
+        if (state.compare.size < 2) {
+          event.preventDefault();
+          showToast(t('explore.compareHint'));
+        }
+        return;
+      }
+
+      /* Avis : note, photo, utile, signalement */
+      const star = event.target.closest('[data-star]');
+      if (star) {
+        event.preventDefault();
+        const input = star.closest('[data-star-input]');
+        const value = Number(star.dataset.star);
+        const hidden = input?.querySelector('[data-rating-value]');
+        if (hidden) hidden.value = value;
+        $$('[data-star]', input || document).forEach((button) => {
+          const active = Number(button.dataset.star) <= value;
+          button.classList.toggle('is-on', active);
+          button.setAttribute('aria-checked', String(Number(button.dataset.star) === value));
+        });
+        return;
+      }
+
+      const helpful = event.target.closest('[data-helpful]');
+      if (helpful) {
+        event.preventDefault();
+        const id = helpful.dataset.helpful;
+        if (state.helpfulGiven.has(id)) return;
+        state.helpfulGiven.add(id);
+        const count = Number(helpful.dataset.count || 0) + 1;
+        const label = helpful.querySelector('[data-helpful-label]');
+        if (label) label.textContent = `${t('detail.review.helpful')} (${count})`;
+        helpful.classList.add('is-active');
+        return;
+      }
+
+      const reportButton = event.target.closest('[data-report-review]');
+      if (reportButton) {
+        event.preventDefault();
+        if (!state.session) {
+          showToast(t('detail.review.login'));
+          openAuthModal('login');
+          return;
+        }
+        openReportForm(reportButton);
+        return;
+      }
+
+      const removePhoto = event.target.closest('[data-remove-review-photo]');
+      if (removePhoto) {
+        event.preventDefault();
+        state.reviewPhotoDraft = null;
+        const form = removePhoto.closest('[data-review-form]');
+        const preview = form?.querySelector('[data-photo-preview]');
+        if (preview) {
+          preview.hidden = true;
+          preview.innerHTML = '';
+        }
+        const input = form?.querySelector('[data-review-photo]');
+        if (input) input.value = '';
+        return;
+      }
+
+      /* Promos, offres, QR, partage */
+      if (event.target.closest('[data-toggle-coupon-qr]')) {
+        const block = $('[data-coupon-qr]');
+        if (block) block.hidden = !block.hidden;
+        return;
+      }
+
+      const printButton = event.target.closest('[data-print-qr]');
+      if (printButton) {
+        event.preventDefault();
+        const listing = getListing(printButton.dataset.printQr);
+        if (listing) printQrSheet(listing);
+        return;
+      }
+
+      const copyButton = event.target.closest('[data-copy]');
+      if (copyButton) {
+        event.preventDefault();
+        copyText(copyButton.dataset.copy).then((success) => {
+          showToast(success ? t('toast.copied') : t('toast.error'));
+        });
+        return;
+      }
+
+      const removePromoButton = event.target.closest('[data-remove-promo]');
+      if (removePromoButton) {
+        event.preventDefault();
+        removePromo(removePromoButton.dataset.removePromo);
+        return;
+      }
+
+      const removeOfferButton = event.target.closest('[data-remove-offer]');
+      if (removeOfferButton) {
+        event.preventDefault();
+        removeDailyOffer(removeOfferButton.dataset.removeOffer);
+        return;
+      }
+
+      const clearHistory = event.target.closest('[data-clear-history]');
+      if (clearHistory) {
+        event.preventDefault();
+        state.history = [];
+        writeStorage(STORAGE.history, state.history);
+        renderRoute();
+        showToast(t('settings.saved'));
+        return;
+      }
+    });
+
+    /* Formulaires v2 */
+    document.addEventListener('submit', (event) => {
+      const form = event.target;
+      if (form.matches('[data-review-form]')) {
+        event.preventDefault();
+        handleReviewSubmit(form);
+        return;
+      }
+      if (form.matches('[data-report-form]')) {
+        event.preventDefault();
+        handleReportSubmit(form);
+        return;
+      }
+      if (form.matches('[data-promo-form]')) {
+        event.preventDefault();
+        handlePromoSubmit(form);
+        return;
+      }
+      if (form.matches('[data-daily-form]')) {
+        event.preventDefault();
+        handleDailyOfferSubmit(form);
+        return;
+      }
+    });
+
+    /* Photo d'avis : compression avant stockage */
+    document.addEventListener('change', async (event) => {
+      const input = event.target.closest('[data-review-photo]');
+      if (!input) return;
+      const file = input.files?.[0];
+      if (!file) return;
+      const form = input.closest('[data-review-form]');
+      if (!form) return;
+      const options = dataSaverActive() ? { maxWidth: 640, quality: 0.6 } : { maxWidth: 900, quality: 0.72 };
+      const dataUrl = await compressImage(file, options);
+      if (!dataUrl) {
+        showToast(t('toast.error'));
+        return;
+      }
+      state.reviewPhotoDraft = { listingId: form.dataset.listing, dataUrl };
+      const preview = form.querySelector('[data-photo-preview]');
+      if (preview) {
+        preview.hidden = false;
+        preview.innerHTML = `<img src="${dataUrl}" alt="${escapeHtml(t('detail.review.photoHint'))}" />
+          <button type="button" class="review-action is-warn" data-remove-review-photo>${ICONS.x}${escapeHtml(t('detail.review.removePhoto'))}</button>`;
+      }
+    });
+
+    /* Échap et piège à focus pour la fenêtre de paramètres */
+    document.addEventListener('keydown', (event) => {
+      const modal = $('#settings-modal');
+      if (!modal || modal.hidden) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeSettingsModal();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const dialog = $('.settings-dialog', modal);
+      if (!dialog) return;
+      const focusables = $$('a[href], button:not([disabled]), input, select, textarea', dialog).filter(
+        (element) => element.offsetParent !== null
+      );
+      if (!focusables.length) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    });
+
+    /* Mise à jour des badges « Ouvert / Fermé » chaque minute */
+    window.setInterval(refreshOpenBadges, 60000);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshOpenBadges();
+    });
   }
 
   /* ---------------------- Événements globaux ------------------------------ */
@@ -3201,7 +5151,11 @@
     initTheme();
     initSplash();
     bindGlobalEvents();
+    bindV2Events();
     bindAuthEvents();
+    if (window.BamaHubI18n) window.BamaHubI18n.apply();
+    syncLangButton();
+    syncSettingsUI();
     updateAccountUI();
     renderRoute({ initial: true });
     state.initialized = true;
