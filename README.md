@@ -286,7 +286,9 @@ relatives, donc toujours crédibles), dont deux événements passés qui servent
 vérifier la purge. Tout fonctionne : chat local, filtres, calendrier, carte,
 import par analyse de texte, publication, validation, quotas et .ics. Le bandeau
 « Démonstration · données d’exemple » et la réponse du chat le signalent
-explicitement — **aucun serveur n’est appelé**.
+explicitement : **aucun appel IA et aucune donnée personnelle transmise**.
+Seule une sonde de disponibilité de l’API est tentée au chargement, puis le
+module bascule en local — sans bloquer l’affichage.
 
 - Jeton de validation de démonstration : `demo-admin` (prérempli dans le
   panneau « Validation des propositions »).

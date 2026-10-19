@@ -170,7 +170,6 @@
       'toast.error': 'Une erreur est survenue. Réessayez.',
       'unit.min': 'min',
       'unit.h': 'h',
-      'footer.disclaimer': 'Données d’exemple en mode démonstration — aucun serveur n’est appelé.',
     },
     bm: {
       'nav.events': 'Fɛtiw',
@@ -317,7 +316,6 @@
       'toast.error': 'Fili dɔ kɛra. I ka kɔfɛ.',
       'unit.min': 'min',
       'unit.h': 'h',
-      'footer.disclaimer': 'Dɛmɔ data — server tɛ wele.',
     },
   };
 
