@@ -784,7 +784,7 @@
 
         <div class="map-shell" data-map-shell data-map-view ${filters.view === 'map' ? '' : 'hidden'}>
           <div id="explorer-map" class="explorer-map" role="application" aria-label="Carte des adresses de Bamako"></div>
-          <p class="map-hint">${ICONS.info} Touchez une épingle pour voir l’adresse, l’itinéraire et le partage WhatsApp.</p>
+          <p class="map-hint">${ICONS.info} Cliquez sur une épingle pour voir l’adresse, l’itinéraire et le partage WhatsApp.</p>
         </div>
       </div>`;
 
