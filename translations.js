@@ -22,6 +22,8 @@
     /* Navigation et en-tête */
     'nav.home': 'Accueil',
     'nav.explore': 'Explorer',
+    'nav.events': 'Événements',
+    'nav.agenda': 'Agenda',
     'nav.favorites': 'Favoris',
     'nav.add': 'Ajouter',
     'nav.account': 'Profil',
@@ -513,6 +515,8 @@
     /* Navigation et en-tête */
     'nav.home': 'So',
     'nav.explore': 'Yɔrɔw',
+    'nav.events': 'Fɛtiw',
+    'nav.agenda': 'Agenda',
     'nav.favorites': 'Favoriw',
     'nav.add': 'Fara',
     'nav.account': 'Kontu',

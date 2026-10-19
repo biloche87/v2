@@ -1217,8 +1217,7 @@
         : '';
 
     document.title = t('home.docTitle');
-
-    $('#main').innerHTML = `
+    const eventsHomeSlot = `
       <section class="hero">
         <div class="container hero-content">
           <span class="hero-eyebrow"><span class="dot"></span> ${escapeHtml(t('home.eyebrow'))}</span>
@@ -1260,6 +1259,8 @@
       <div class="container">
         ${dutyMarkup}
         ${offersMarkup}
+
+        <div id="home-events-slot"></div>
 
         <section class="section" aria-labelledby="categories-title">
           <div class="section-head">
@@ -1320,6 +1321,27 @@
           <a class="btn btn-white btn-lg" href="#/ajouter">${ICONS.plus} ${escapeHtml(t('home.cta.action'))}</a>
         </div>
       </div>`;
+
+    $('#main').innerHTML = eventsHomeSlot;
+    const eventsSlot = document.getElementById('home-events-slot');
+    if (eventsSlot) window.BamaHubEventsUI?.mountHome(eventsSlot);
+  }
+
+  /**
+   * Page « Événements & bons plans ». Le module events-ui.js porte tout le
+   * rendu ; app.js ne fait que lui céder #main et gérer la route.
+   */
+  function renderEventsPage() {
+    document.title = `${t('nav.events')} · BamaHub`;
+    const main = $('#main');
+    if (window.BamaHubEventsUI) {
+      window.BamaHubEventsUI.render(main);
+      return;
+    }
+    main.innerHTML = `<div class="container"><div class="ev-empty" style="margin-top:2rem">
+      <p>Le module Événements n’a pas pu être chargé. Rechargez la page.</p>
+      <a class="btn btn-ghost btn-sm" href="#/">Retour à l’accueil</a>
+    </div></div>`;
   }
 
   /* --------------------------- Explorateur -------------------------------- */
@@ -3207,6 +3229,10 @@
       case '/comparer':
         setActiveNav('explore');
         renderCompare(route);
+        break;
+      case '/evenements':
+        setActiveNav('events');
+        renderEventsPage();
         break;
       case '/ajouter':
         setActiveNav('add');

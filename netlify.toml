@@ -1,0 +1,35 @@
+# ==========================================================================
+# BamaHub — hébergement Netlify
+# --------------------------------------------------------------------------
+# Le site reste 100 % statique (index.html + CSS + JS). Les fonctions ne
+# servent qu’au module Événements :
+#   /api/events          lecture de la base (aucune IA)
+#   /api/chat            assistant ancré sur la base
+#   /api/import-event    extraction d’une affiche (Gemini vision)
+#   /api/submit-event    proposition d’un organisateur
+#   /api/report-event    signalement
+#   /api/admin-events    validation admin (jeton)
+#   /api/health          diagnostic
+#   /api/refresh-events  tâche planifiée (06:00 et 15:00)
+# ==========================================================================
+
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+  force = true
+
+# Bamako = UTC+0 toute l’année : ces heures sont donc bien 6 h et 15 h locales.
+[functions."refresh-events"]
+  schedule = "0 6,15 * * *"
+
+[dev]
+  port = 8888
+  publish = "."

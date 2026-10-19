@@ -15,6 +15,7 @@ dans un navigateur, une identité de marque vectorisée et un manifeste PWA.
 - [Lancer le projet](#lancer-le-projet)
 - [Fonctionnalités](#fonctionnalités)
 - [Nouveautés v2](#nouveautés-v2)
+- [Module Événements & bons plans IA](#module-événements--bons-plans-ia)
 - [Cartes & géolocalisation](#cartes--géolocalisation)
 - [Identité visuelle & logo](#identité-visuelle--logo)
 - [Connexion & inscription](#connexion--inscription)
@@ -115,8 +116,10 @@ partage/                      22 pages Open Graph, une par adresse
 ```
 
 `index.html` charge, dans l’ordre : Leaflet (+ markercluster), `data.js`,
-`translations.js`, `qrcode.js`, puis `app.js`. Aucun autre script n’est
-nécessaire et aucune étape de compilation n’est requise.
+`events-data.js`, `translations.js`, `qrcode.js`, `app.js`, puis
+`events-ui.js`. Aucune étape de compilation n’est requise ; les pages
+`#/evenements` restent utilisables même si `events-ui.js` ne se charge pas
+(message de repli explicite).
 
 ### Stockage local v2
 
@@ -142,6 +145,192 @@ Les fichiers de `partage/` sont statiques (les robots sociaux n’exécutent pas
 JavaScript). Après une modification des fiches, les régénérer avec le script
 `tools/build-share-pages.js` — ou adapter à la main `og:title`,
 `og:description`, `og:image` et l’URL de redirection.
+
+---
+
+## Module Événements & bons plans IA
+
+Un agenda bilingue pour Bamako, alimenté **deux fois par jour** par une tâche
+planifiée (06:00 et 15:00, heure de Bamako = UTC+0), stocké dans Supabase et lu
+par les visiteurs **sans aucun appel IA**. Le module est volontairement isolé :
+si le backend n’est pas configuré, le site reste entièrement fonctionnel en
+**mode démonstration** avec un jeu d’exemple réaliste et la même interface.
+
+### Ce que voient les visiteurs
+
+| Fonction | Où / comment l’essayer |
+| --- | --- |
+| **Agenda filtrable** | `#/evenements` ou « Événements » dans la navigation. Filtres Aujourd’hui / Ce soir / Ce week-end / Gratuit / Bon plan, catégorie, quartier, recherche libre. |
+| **Trois vues** | **Liste** (cartes avec date, lieu, prix et indice de fiabilité), **Calendrier** mensuel cliquable (pastilles par catégorie), **Carte** Leaflet avec épingles regroupées et itinéraires Google Maps / Waze. |
+| **Assistant en langage naturel** | « Que faire samedi ? », « Un concert gratuit ce soir », « Événements à Badalabougou ». La réponse est construite depuis la base ; les cartes renvoient vers la fiche et la source. |
+| **Fiche détaillée** | Dates, lieu, tarif, organisateur, indice de fiabilité, **source cliquable**, bouton « Signaler » (mauvaise date, mauvais lieu, annulé, douteux). |
+| **Badges de confiance** | « Vérifié » (source officielle ou validation humaine) ou « **Détecté par IA, à confirmer** » pour les suggestions automatiques. L’indice 0–100 est visible partout. |
+| **Import par affiche** | Photo, lien ou texte collé → Gemini remplit la fiche → l’utilisateur **relit et corrige** → la proposition part en validation. |
+| **Publier mon événement** | Formulaire gratuit (titre, catégorie, dates, lieu, quartier, prix, organisateur, contact, source). Toute proposition passe par la file de validation. |
+| **Accueil « Ce soir à Bamako »** | Trois idées du soir avec **Ajouter à mon agenda** (.ics), **Partager sur WhatsApp** et **Itinéraire**. |
+| **Quotas lisibles** | Limites par utilisateur avec message clair et délai d’attente : chat 30/h et 150/jour, imports 6/h, publications 5/jour, signalements 20/h (valeurs serveur, réglables). |
+
+Toutes les chaînes basculent en **bambara** avec le bouton de langue, y compris
+les cartes, le calendrier, le chat, les formulaires et les messages d’erreur.
+
+### Architecture
+
+```
+Utilisateur ──► index.html / app.js
+                     │  (route #/evenements)
+                     ▼
+               events-ui.js  ── interface, filtres, calendrier, carte
+                     │
+                     ▼
+               events-data.js ── cache local + bascule démo ⇄ live
+                     │  fetch /api/*
+                     ▼
+┌──────────────────────────────────────────────────────────────────┐
+│ Netlify Functions (netlify/functions/)                           │
+│  events          GET  liste publique (cache 60 s)                │
+│  chat            POST réponse ancrée sur la base (+ quota)       │
+│  import-event    POST affiche → brouillon (Gemini vision)        │
+│  submit-event    POST proposition d’organisateur                 │
+│  report-event    POST signalement                                │
+│  admin-events    GET/POST file de validation (jeton)             │
+│  refresh-events  tâche planifiée 06:00 & 15:00                   │
+│  health          GET diagnostic sans secret                      │
+└───────────────┬──────────────────────────────┬───────────────────┘
+                │ PostgREST (service_role)     │ REST Gemini
+                ▼                              ▼
+          Supabase (events, submissions,   Gemini 2.5 Flash
+          reports, rate_limits)            (+ Google Search si dispo)
+```
+
+**Aucune clé n’est présente dans le navigateur** : `GEMINI_API_KEY`,
+`SUPABASE_SERVICE_ROLE_KEY` et `ADMIN_TOKEN` ne sont lus que par les fonctions.
+Les visites ne déclenchent aucun appel IA : elles lisent la table `events`.
+
+### Mise en service
+
+1. **Créer le schéma** — coller `supabase/schema.sql` dans l’éditeur SQL de
+   Supabase (tables, index, RLS, fonction atomique `consume_rate_limit`).
+   `supabase/seed.sql` ajoute six événements de démonstration facultatifs
+   (`delete from public.events where source_kind = 'seed';` pour les retirer).
+2. **Déclarer les variables d’environnement** dans Netlify
+   (*Site configuration → Environment variables*) :
+
+   | Variable | Rôle | Défaut |
+   | --- | --- | --- |
+   | `SUPABASE_URL` | URL du projet (`https://xxx.supabase.co`) | — |
+   | `SUPABASE_SERVICE_ROLE_KEY` | clé service role, **jamais** exposée au client | — |
+   | `GEMINI_API_KEY` | clé Google AI Studio | — |
+   | `GEMINI_MODEL` | modèle principal | `gemini-2.5-flash` |
+   | `GEMINI_FALLBACK_MODELS` | modèles de repli, séparés par des virgules | `gemini-2.0-flash,gemini-1.5-flash` |
+   | `GEMINI_CHAT` | `1` pour activer la reformulation Gemini du chat | `0` |
+   | `GEMINI_TIMEOUT_MS` | délai maximal par appel | `25000` |
+   | `ADMIN_TOKEN` | jeton du panneau de validation | — |
+   | `SITE_URL` | URL publique (liens absolus) | `https://bamahub.ml` |
+   | `CHAT_LIMIT_PER_HOUR` / `_DAY` | quotas du chat | `30` / `150` |
+   | `IMPORT_LIMIT_PER_HOUR` | imports d’affiches | `6` |
+   | `SUBMIT_LIMIT_PER_DAY` | publications | `5` |
+   | `REPORT_LIMIT_PER_HOUR` | signalements | `20` |
+
+   Les fonctions synchrones sont dimensionnées pour la limite Netlify de
+   10 secondes (import d’affiche : 9 s, reformulation du chat : 6 s).
+   `refresh-events` dispose de 30 s : 14 s pour la veille, 6 s au maximum pour
+   la structuration des propositions. Un dépassement renvoie une erreur propre
+   (`timeout`, `degraded`) au lieu d’être coupé au milieu d’une écriture.
+
+3. **Déployer** — `netlify.toml` publie la racine du dépôt, bundle
+   `netlify/functions/` et redirige `/api/*` vers les fonctions. La planification
+   est déclarée sur `refresh-events` (`0 6,15 * * *`, UTC = heure de Bamako).
+
+En local : `netlify dev` sert le site et les fonctions sur
+`http://localhost:8888` ; sans variables, toutes les routes répondent
+proprement `503 not_configured` et l’interface reste en démonstration.
+Déclenchement manuel de la veille :
+
+```bash
+curl -X POST https://<site>/.netlify/functions/refresh-events \
+  -H "x-admin-token: $ADMIN_TOKEN"
+```
+
+### Contrat d’API
+
+| Route | Corps / paramètres | Réponse |
+| --- | --- | --- |
+| `GET /api/events` | `limit`, `range`, `free=1`, `deal=1`, `cat`, `q`, `id` | `{ ok, events[], count, generatedAt, mode }` |
+| `POST /api/chat` | `{ question, lang, sessionId, clientTime }` | `{ ok, answer, events[], intent, remaining, degraded }` |
+| `POST /api/import-event` | `{ text, link, imageDataUrl, imageName, lang }` | `{ ok, draft, confidence, missing[], notice }` |
+| `POST /api/submit-event` | fiche complète + `sourceKind` | `201 { ok, submission, remaining }` |
+| `POST /api/report-event` | `{ eventId, reason, note }` | `{ ok, message }` |
+| `GET/POST /api/admin-events` | en-tête `x-admin-token` | file d’attente / `{ ok, status, event }` |
+| `GET /api/health` | — | état des services, sans secret |
+
+Erreurs : `400` (validation), `401` (jeton), `405`, `413` (image > 4,5 Mo),
+`429` + `Retry-After` (quota), `503 not_configured` (backend absent),
+`502` (base ou Gemini indisponible). Le client bascule alors en démo ou affiche
+un message lisible, jamais une trace technique.
+
+### Déduplication et purge
+
+- **Clé métier** `dedupe_key` = empreinte FNV-1a du titre normalisé + jour +
+  lieu, unique en base.
+- Sont aussi fusionnés : même `source_url`, ou titre très proche (Jaccard ≥ 0,62)
+  à moins de 36 h d’écart. Le doublon le plus fiable enrichit la ligne existante
+  (source, image, score) sans écraser un statut « vérifié ».
+- Les événements terminés depuis plus de 6 h sont supprimés à chaque passage de
+  `refresh-events` ; la lecture publique filtre également le passé.
+- Une proposition `pending` ou `rejected` n’est jamais exposée publiquement.
+
+### Mode démonstration
+
+Sans backend, `events-data.js` génère **24 événements d’exemple** (dates
+relatives, donc toujours crédibles), dont deux événements passés qui servent à
+vérifier la purge. Tout fonctionne : chat local, filtres, calendrier, carte,
+import par analyse de texte, publication, validation, quotas et .ics. Le bandeau
+« Démonstration · données d’exemple » et la réponse du chat le signalent
+explicitement — **aucun serveur n’est appelé**.
+
+- Jeton de validation de démonstration : `demo-admin` (prérempli dans le
+  panneau « Validation des propositions »).
+- Clés de stockage : `bamahub:events:local`, `:submissions`, `:reports`,
+  `:limits`, `:device`, `:admin`.
+- L’import d’affiche sans backend utilise une extraction **par mots-clés**,
+  annoncée comme telle ; les images sont réduites côté client (max 1400 px,
+  JPEG 0,82) avant tout envoi.
+
+### Sécurité et limites assumées
+
+- La clé Gemini et la clé service role ne quittent jamais le serveur ; le
+  panneau admin compare `ADMIN_TOKEN` en temps constant. Pour ouvrir la
+  validation à des organisateurs, remplacer ce jeton par **Netlify Identity**
+  ou **Supabase Auth** (le reste du flux est inchangé).
+- RLS activée sur les quatre tables, aucune politique publique : la clé `anon`
+  ne lit rien. Si le site doit un jour interroger PostgREST directement, ajouter
+  une politique `select` limitée aux statuts publics.
+- La veille IA ne publie jamais en « vérifié » : les découvertes Gemini sont
+  plafonnées à 88/100 et restent « à confirmer » jusqu’à validation humaine.
+- Les quotas par IP + session sont doublés d’un compteur mémoire de secours
+  (utile en `netlify dev`), la source de vérité restant Postgres.
+
+### Vérifications
+
+Les tests de développement couvrent le mode démo et le contrat client ↔ serveur :
+
+```bash
+node --check events-data.js && node --check events-ui.js
+node --check netlify/lib/*.mjs netlify/functions/*.mjs
+npm install --no-save jsdom   # une seule fois, pour les deux tests d’interface
+# harnais jsdom : accueil, filtres, calendrier, carte, chat, fiche, publication,
+# validation admin, bascule BM, quotas
+node tools/tests/events-ui.test.js
+# contrat live avec un fetch simulé (prix price_fcfa, chat, import, submit)
+node tools/tests/live-contract.test.js
+# fonctions Netlify sans clés : 503/401/429/413, dédoublonnage, purge
+node tools/tests/functions.test.mjs
+# faux PostgREST en mémoire : lecture, chat, publication, validation, purge, 429
+node tools/tests/server-flow.test.mjs
+# carte Leaflet réelle : création, bascule de vue, destruction
+node tools/tests/map.test.js
+```
+
 
 ---
 ## Cartes & géolocalisation
@@ -323,6 +512,14 @@ app.js              Application : état, rendu, routage, filtres, favoris, formu
                     session, carte, avis, comparateur, QR et écran de démarrage
 translations.js     Dictionnaires français / bambara et helpers i18n
 data.js             CONFIG des catégories + 22 adresses de démonstration
+events-data.js      Module événements : cache local, analyse d’intention, chat,
+                    dédoublonnage, quotas, .ics — bascule démo ⇄ API
+events-ui.js        Interface événements : liste, calendrier, carte, fiche,
+                    import d’affiche, publication, validation, accueil
+netlify/lib/        Cœur serveur : events-core (règles pures), env, http,
+                    supabase, gemini, rate-limit
+netlify/functions/  8 fonctions Netlify (dont la tâche planifiée)
+supabase/           schema.sql (tables, RLS, quotas) et seed.sql de démonstration
 manifest.json       Manifeste PWA (icônes, couleurs, raccourcis)
 favicon.ico         Favicon multi-tailles (16, 32, 48)
 assets/logo/        Logo vectorisé et déclinaisons (voir ci-dessous)
@@ -336,8 +533,8 @@ partage/            Pages Open Graph statiques (22 adresses)
 tools/              Script de régénération des pages de partage
 ```
 
-Soit **cinq fichiers de code** (`index.html`, `style.css`, `app.js`, `data.js`,
-`translations.js`) plus les ressources de marque (`manifest.json`,
+Soit **sept fichiers de code** (`index.html`, `style.css`, `app.js`, `data.js`,
+`translations.js`, `events-data.js`, `events-ui.js`) plus les ressources de marque (`manifest.json`,
 `favicon.ico`, `assets/logo/`), les bibliothèques auto-hébergées
 (`assets/vendor/leaflet/`, `assets/vendor/qrcode/`), les visuels
 (`assets/photos/`) et les pages de partage (`partage/`).

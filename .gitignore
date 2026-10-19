@@ -1,0 +1,8 @@
+# Dépendances de développement (jamais nécessaires au site statique)
+node_modules/
+package-lock.json
+
+# Artefacts locaux
+.DS_Store
+*.log
+.netlify/
