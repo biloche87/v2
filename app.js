@@ -37,6 +37,14 @@
     custom: 'bamahub:listings',
     theme: 'bamahub:theme',
     lastExplorer: 'bamahub:last-explorer',
+    accounts: 'bamahub:accounts',
+    session: 'bamahub:session',
+  };
+
+  const DEMO_ACCOUNT = {
+    name: 'Awa Traoré',
+    email: 'demo@bamahub.ml',
+    password: 'bamako2026',
   };
 
   const SORT_OPTIONS = [
@@ -157,6 +165,11 @@
     previousPath: null,
     lastExplorerHash: '#/explorer',
     initialized: false,
+    accounts: [],
+    session: null,
+    authMode: 'login',
+    authReturnRoute: '#/',
+    lastFocusedElement: null,
   };
 
   /** Charge les adresses ajoutées localement + les favoris. */
@@ -185,6 +198,17 @@
     );
 
     state.lastExplorerHash = readStorage(STORAGE.lastExplorer, '#/explorer') || '#/explorer';
+
+    // Comptes locaux (démonstration) et session en cours.
+    const accounts = readStorage(STORAGE.accounts, []);
+    state.accounts = Array.isArray(accounts)
+      ? accounts.filter((account) => account && account.email && account.name)
+      : [];
+
+    const session = readStorage(STORAGE.session, null);
+    state.session = session?.email
+      ? state.accounts.find((account) => account.email === session.email) || null
+      : null;
   }
 
   const getCategory = (id) => CATEGORIES.find((cat) => cat.id === id) || FALLBACK_CATEGORY;
@@ -1624,6 +1648,11 @@
     const route = parseRoute();
     state.route = route;
 
+    // Toute navigation hors des routes d'authentification referme la fenêtre.
+    const authModal = $('#auth-modal');
+    const isAuthRoute = route.path === '/connexion' || route.path === '/inscription';
+    if (authModal && !authModal.hidden && !isAuthRoute) closeAuthModal({ syncRoute: false });
+
     // Réinitialise le brouillon du formulaire quand on arrive depuis une autre page.
     if (route.path === '/ajouter' && state.previousPath !== '/ajouter') {
       const categoryFromUrl = route.params.get('cat');
@@ -1647,6 +1676,13 @@
         setActiveNav('add');
         if (!state.addDraft) state.addDraft = createDraft('restaurants');
         renderAddPage();
+        break;
+      case '/connexion':
+      case '/inscription':
+        setActiveNav('');
+        // La fenêtre s'ouvre par-dessus la page courante (ou l'accueil).
+        if (!$('#main').children.length) renderHome();
+        openAuthModal(route.path === '/inscription' ? 'register' : 'login');
         break;
       default:
         if (route.segments[0] === 'adresse' && route.segments[1]) {
@@ -1723,6 +1759,432 @@
 
     region.appendChild(toast);
     timer = setTimeout(remove, duration);
+  }
+
+
+  /* ==========================================================================
+     Écran de démarrage, connexion et compte local
+     --------------------------------------------------------------------------
+     Les comptes sont une démonstration : tout reste dans le navigateur
+     (localStorage). Le mot de passe n'est jamais stocké en clair.
+     ========================================================================== */
+
+  /** Initiales affichées dans l'avatar (« Awa Traoré » → « AT »). */
+  function initialsOf(name = '') {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    return (parts[0][0] + (parts[1]?.[0] || '')).toUpperCase();
+  }
+
+  /** Empreinte du mot de passe (SHA-256, ou repli si indisponible en file://). */
+  async function hashPassword(password) {
+    const data = new TextEncoder().encode(`bamahub:${password}`);
+    if (window.crypto?.subtle) {
+      try {
+        const buffer = await window.crypto.subtle.digest('SHA-256', data);
+        return [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+      } catch (error) {
+        // On bascule sur le repli ci-dessous.
+      }
+    }
+    let hash = 2166136261;
+    for (const byte of data) {
+      hash ^= byte;
+      hash = Math.imul(hash, 16777619);
+    }
+    return `fnv:${(hash >>> 0).toString(16)}`;
+  }
+
+  const isSignedIn = () => Boolean(state.session);
+
+  /** Met à jour le bouton de compte (en-tête) et l'onglet mobile. */
+  function updateAccountUI() {
+    const signed = isSignedIn();
+    const account = state.session;
+    const label = signed ? account.name.split(' ')[0] : 'Se connecter';
+    const initials = signed ? initialsOf(account.name) : '?';
+
+    $$('[data-auth-label]').forEach((element) => {
+      element.textContent = label;
+    });
+    $$('[data-auth-avatar]').forEach((element) => {
+      element.textContent = initials;
+    });
+    $$('[data-auth-open]').forEach((element) => {
+      element.classList.toggle('is-signed-in', signed);
+      element.setAttribute(
+        'aria-label',
+        signed ? `Compte de ${account.name}` : 'Se connecter ou créer un compte'
+      );
+      element.dataset.authOpen = signed ? 'account' : 'login';
+    });
+  }
+
+  function persistAccounts() {
+    writeStorage(STORAGE.accounts, state.accounts);
+  }
+
+  function persistSession() {
+    if (state.session) {
+      writeStorage(STORAGE.session, { email: state.session.email });
+    } else {
+      try {
+        localStorage.removeItem(STORAGE.session);
+      } catch (error) {
+        // Stockage indisponible : la session reste simplement en mémoire.
+      }
+    }
+  }
+
+  /* ------------------------------- Splash --------------------------------- */
+  function initSplash() {
+    const splash = $('#splash');
+    if (!splash) return;
+
+    const startedAt = performance.now();
+    document.body.classList.add('is-loading');
+    let hidden = false;
+
+    const hide = () => {
+      if (hidden) return;
+      hidden = true;
+      splash.classList.add('is-hidden');
+      document.body.classList.remove('is-loading');
+      splash.addEventListener('transitionend', () => splash.remove(), { once: true });
+      // Filet de sécurité (transition désactivée, onglet en arrière-plan…).
+      setTimeout(() => splash.remove(), 1400);
+    };
+
+    // Durée d'affichage : assez pour apprécier l'animation, assez courte pour
+    // ne pas retarder l'accès au contenu.
+    const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const minimumDelay = reduced ? 320 : 1500;
+
+    const schedule = () => {
+      const wait = Math.max(0, minimumDelay - (performance.now() - startedAt));
+      setTimeout(hide, wait);
+    };
+
+    if (document.readyState === 'complete') {
+      schedule();
+    } else {
+      window.addEventListener('load', schedule, { once: true });
+    }
+
+    // Le splash ne bloque jamais l'application plus de 2,6 s.
+    setTimeout(hide, 2600);
+  }
+
+  /* --------------------------- Fenêtre de connexion ----------------------- */
+  function authViewTemplate(mode) {
+    if (mode === 'account' && isSignedIn()) {
+      const account = state.session;
+      return `
+        <div class="auth-account">
+          <span class="avatar">${escapeHtml(initialsOf(account.name))}</span>
+          <div>
+            <p class="auth-account-name">${escapeHtml(account.name)}</p>
+            <p class="auth-account-mail">${escapeHtml(account.email)}</p>
+          </div>
+          <div class="auth-account-actions">
+            <a class="btn btn-primary btn-block" href="#/favoris" data-auth-close>${ICONS.heart} Mes favoris</a>
+            <a class="btn btn-ghost btn-block" href="#/ajouter" data-auth-close>${ICONS.plus} Ajouter une adresse</a>
+            <button type="button" class="btn btn-danger-soft btn-block" data-auth-signout>Se déconnecter</button>
+          </div>
+          <p class="auth-note">${ICONS.info} Compte de démonstration stocké uniquement dans ce navigateur.</p>
+        </div>`;
+    }
+
+    const register = mode === 'register';
+    return `
+      <div class="auth-form">
+        <div>
+          <h2 class="auth-title" id="auth-title">${register ? 'Créer un compte' : 'Content de vous revoir'}</h2>
+          <p class="auth-sub" id="auth-subtitle">
+            ${register
+              ? 'Enregistrez vos adresses favorites et retrouvez-les à chaque visite.'
+              : 'Connectez-vous pour retrouver vos favoris et vos adresses.'}
+          </p>
+        </div>
+
+        <form class="auth-form" data-auth-form="${register ? 'register' : 'login'}" novalidate>
+          ${register
+            ? `<div class="field">
+                 <label for="auth-name">Nom complet</label>
+                 <input class="input" id="auth-name" name="name" type="text" autocomplete="name" required maxlength="60" placeholder="Ex. Awa Traoré" />
+               </div>`
+            : ''}
+          <div class="field">
+            <label for="auth-email">Adresse e-mail</label>
+            <input class="input" id="auth-email" name="email" type="email" autocomplete="email" required placeholder="vous@exemple.ml" />
+          </div>
+          <div class="field">
+            <label for="auth-password">Mot de passe</label>
+            <input class="input" id="auth-password" name="password" type="password"
+              autocomplete="${register ? 'new-password' : 'current-password'}" required minlength="6"
+              placeholder="6 caractères minimum" />
+          </div>
+          <p class="auth-error" data-auth-error role="alert"></p>
+          <button class="btn btn-primary btn-block" type="submit">
+            ${register ? 'Créer mon compte' : 'Se connecter'}
+          </button>
+        </form>
+
+        ${register
+          ? ''
+          : `<p class="auth-switch">Pas encore de compte ?
+               <button type="button" data-auth-tab="register">Créer un compte</button>
+             </p>`}
+        ${register
+          ? `<p class="auth-switch">Déjà inscrit ?
+               <button type="button" data-auth-tab="login">Se connecter</button>
+             </p>`
+          : `<p class="auth-switch">Compte de démonstration :
+               <button type="button" data-auth-demo>remplir automatiquement</button>
+             </p>`}
+
+        <p class="auth-note">${ICONS.info} Démonstration : le compte reste dans ce navigateur, aucune donnée n'est envoyée.</p>
+      </div>`;
+  }
+
+  function renderAuthView(mode = state.authMode) {
+    state.authMode = mode;
+    const view = $('[data-auth-view]');
+    if (!view) return;
+
+    view.innerHTML = authViewTemplate(mode);
+
+    // Onglets : l'état « Compte » garde les deux onglets désactivés.
+    const isAccount = mode === 'account' && isSignedIn();
+    $$('[data-auth-tab]').forEach((tab) => {
+      const active = !isAccount && tab.dataset.authTab === mode;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
+    const tabs = $('.auth-tabs');
+    if (tabs) tabs.hidden = isAccount;
+
+    const viewPanel = $('[data-auth-view]');
+    const labelledBy = isAccount ? 'auth-title' : mode === 'register' ? 'tab-register' : 'tab-login';
+    viewPanel?.setAttribute('aria-labelledby', labelledBy);
+
+    // Focus sur le premier champ utile.
+    const focusTarget = view.querySelector('input') || view.querySelector('button, a');
+    focusTarget?.focus({ preventScroll: true });
+  }
+
+  function openAuthModal(mode = 'login', { returnRoute = null } = {}) {
+    const modal = $('#auth-modal');
+    if (!modal) return;
+
+    state.lastFocusedElement = document.activeElement;
+    if (returnRoute) state.authReturnRoute = returnRoute;
+
+    modal.hidden = false;
+    document.body.classList.add('auth-open');
+    document.body.style.overflow = 'hidden';
+
+    // Le contenu de la page derrière la fenêtre devient inerte.
+    ['#main', '.site-header', '.site-footer', '.bottom-nav'].forEach((selector) => {
+      const element = $(selector);
+      if (element) element.setAttribute('inert', '');
+    });
+
+    // Le focus part directement sur le premier champ : on peut taper sans
+    // chercher la souris (le bouton de fermeture reste atteignable au clavier).
+    renderAuthView(mode === 'register' ? 'register' : mode === 'account' && isSignedIn() ? 'account' : 'login');
+  }
+
+  function closeAuthModal({ syncRoute = true } = {}) {
+    const modal = $('#auth-modal');
+    if (!modal || modal.hidden) return;
+
+    modal.hidden = true;
+    document.body.classList.remove('auth-open');
+    document.body.style.overflow = '';
+    ['#main', '.site-header', '.site-footer', '.bottom-nav'].forEach((selector) => {
+      $(selector)?.removeAttribute('inert');
+    });
+
+    const routeIsAuth = state.route?.path === '/connexion' || state.route?.path === '/inscription';
+    if (syncRoute && routeIsAuth) {
+      history.replaceState(null, '', state.authReturnRoute || '#/');
+      state.route = parseRoute();
+    }
+
+    if (state.lastFocusedElement instanceof HTMLElement && document.contains(state.lastFocusedElement)) {
+      state.lastFocusedElement.focus({ preventScroll: true });
+    }
+  }
+
+  function setAuthError(message) {
+    const error = $('[data-auth-error]');
+    if (!error) return;
+    error.textContent = message;
+    error.classList.toggle('is-visible', Boolean(message));
+  }
+
+  /** Crée le compte de démonstration s'il n'existe pas, puis pré-remplit. */
+  async function fillDemoAccount() {
+    const email = $('#auth-email');
+    const password = $('#auth-password');
+    if (email) email.value = DEMO_ACCOUNT.email;
+    if (password) password.value = DEMO_ACCOUNT.password;
+
+    if (!state.accounts.some((account) => account.email === DEMO_ACCOUNT.email)) {
+      state.accounts.push({
+        name: DEMO_ACCOUNT.name,
+        email: DEMO_ACCOUNT.email,
+        password: await hashPassword(DEMO_ACCOUNT.password),
+        createdAt: todayISO(),
+        demo: true,
+      });
+      persistAccounts();
+    }
+
+    setAuthError('');
+    showToast(`Compte de démonstration prêt : ${DEMO_ACCOUNT.email}`, { duration: 4200 });
+  }
+
+  async function handleAuthSubmit(form) {
+    const mode = form.dataset.authForm;
+    const data = new FormData(form);
+    const email = String(data.get('email') || '').trim().toLowerCase();
+    const password = String(data.get('password') || '');
+    const name = String(data.get('name') || '').trim();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+      setAuthError('Merci de saisir une adresse e-mail valide.');
+      return;
+    }
+    if (password.length < 6) {
+      setAuthError('Le mot de passe doit contenir au moins 6 caractères.');
+      return;
+    }
+    if (mode === 'register' && name.length < 2) {
+      setAuthError('Merci d’indiquer votre nom.');
+      return;
+    }
+
+    const hashed = await hashPassword(password);
+
+    if (mode === 'register') {
+      if (state.accounts.some((account) => account.email === email)) {
+        setAuthError('Un compte existe déjà avec cette adresse. Essayez de vous connecter.');
+        return;
+      }
+      const account = {
+        name,
+        email,
+        password: hashed,
+        createdAt: todayISO(),
+      };
+      state.accounts.push(account);
+      persistAccounts();
+      state.session = account;
+      persistSession();
+      updateAccountUI();
+      renderAuthView('account');
+      showToast(`Bienvenue sur BamaHub, ${name.split(' ')[0]} !`);
+      return;
+    }
+
+    const account = state.accounts.find((item) => item.email === email);
+    if (!account || account.password !== hashed) {
+      setAuthError('E-mail ou mot de passe incorrect. Vérifiez votre saisie.');
+      return;
+    }
+
+    state.session = account;
+    persistSession();
+    updateAccountUI();
+    renderAuthView('account');
+    showToast(`Ravi de vous revoir, ${account.name.split(' ')[0]} !`);
+  }
+
+  function signOut({ silent = false } = {}) {
+    if (!state.session) return;
+    const name = state.session.name;
+    state.session = null;
+    persistSession();
+    updateAccountUI();
+    renderAuthView('login');
+    if (!silent) showToast(`À bientôt, ${name.split(' ')[0]} !`);
+  }
+
+  /** Piège de focus minimal : Tab reste dans la fenêtre modale. */
+  function trapFocus(event) {
+    if (event.key !== 'Tab') return;
+    const dialog = $('.auth-dialog');
+    if (!dialog) return;
+    const focusables = $$('a[href], button:not([disabled]), input, select, textarea', dialog).filter(
+      (element) => element.offsetParent !== null
+    );
+    if (!focusables.length) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  function bindAuthEvents() {
+    document.addEventListener('click', (event) => {
+      const opener = event.target.closest('[data-auth-open]');
+      if (opener) {
+        event.preventDefault();
+        const signed = isSignedIn();
+        openAuthModal(signed ? 'account' : 'login', { returnRoute: location.hash || '#/' });
+        return;
+      }
+
+      if (event.target.closest('[data-auth-close]')) {
+        event.preventDefault();
+        closeAuthModal();
+        return;
+      }
+
+      const tab = event.target.closest('[data-auth-tab]');
+      if (tab && $('#auth-modal') && !$('#auth-modal').hidden) {
+        event.preventDefault();
+        renderAuthView(tab.dataset.authTab === 'register' ? 'register' : 'login');
+        return;
+      }
+
+      if (event.target.closest('[data-auth-signout]')) {
+        event.preventDefault();
+        signOut();
+        return;
+      }
+
+      if (event.target.closest('[data-auth-demo]')) {
+        event.preventDefault();
+        fillDemoAccount();
+      }
+    });
+
+    document.addEventListener('submit', (event) => {
+      const form = event.target.closest('[data-auth-form]');
+      if (!form) return;
+      event.preventDefault();
+      handleAuthSubmit(form);
+    });
+
+    document.addEventListener('keydown', (event) => {
+      const modal = $('#auth-modal');
+      if (!modal || modal.hidden) return;
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        closeAuthModal();
+        return;
+      }
+      trapFocus(event);
+    });
   }
 
   /* ---------------------------- Favoris ----------------------------------- */
@@ -1906,7 +2368,10 @@
   function init() {
     loadState();
     initTheme();
+    initSplash();
     bindGlobalEvents();
+    bindAuthEvents();
+    updateAccountUI();
     renderRoute({ initial: true });
     state.initialized = true;
 

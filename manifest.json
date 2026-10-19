@@ -1,0 +1,60 @@
+{
+  "name": "BamaHub — L’annuaire de Bamako",
+  "short_name": "BamaHub",
+  "description": "Le répertoire local de Bamako : restaurants, hôtels, pharmacies de garde, boutiques, salons, garages, écoles, services et événements.",
+  "lang": "fr",
+  "dir": "ltr",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#2563eb",
+  "theme_color": "#2563eb",
+  "categories": ["travel", "food", "lifestyle"],
+  "icons": [
+    {
+      "src": "assets/logo/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/logo/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "assets/logo/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "assets/logo/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Explorer les adresses",
+      "short_name": "Explorer",
+      "url": "./index.html#/explorer",
+      "icons": [{ "src": "assets/logo/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Mes favoris",
+      "short_name": "Favoris",
+      "url": "./index.html#/favoris",
+      "icons": [{ "src": "assets/logo/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Ajouter une adresse",
+      "short_name": "Ajouter",
+      "url": "./index.html#/ajouter",
+      "icons": [{ "src": "assets/logo/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

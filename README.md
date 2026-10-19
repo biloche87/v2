@@ -5,8 +5,8 @@ boutiques, salons de coiffure/beauté, garages, écoles, services (plombier,
 électricien) et événements — réunis dans une application web légère, mobile first,
 avec mode sombre.
 
-Aucun framework, aucun build : quatre fichiers, ouvrables directement dans un
-navigateur.
+Aucun framework, aucun build : des fichiers statiques ouvrables directement
+dans un navigateur, une identité de marque vectorisée et un manifeste PWA.
 
 ---
 
@@ -14,6 +14,8 @@ navigateur.
 
 - [Lancer le projet](#lancer-le-projet)
 - [Fonctionnalités](#fonctionnalités)
+- [Identité visuelle & logo](#identité-visuelle--logo)
+- [Connexion & inscription](#connexion--inscription)
 - [Structure des fichiers](#structure-des-fichiers)
 - [Architecture des données](#architecture-des-données)
 - [Ajouter une catégorie](#ajouter-une-catégorie)
@@ -37,8 +39,9 @@ python3 -m http.server 8000
 # puis http://localhost:8000
 ```
 
-> Le stockage local (favoris, adresses ajoutées, thème) fonctionne aussi en
-> `file://`, mais un petit serveur HTTP reste plus proche des conditions réelles.
+> Le stockage local (favoris, adresses ajoutées, thème, comptes) fonctionne aussi
+> en `file://`, mais un petit serveur HTTP reste plus proche des conditions
+> réelles (favicon, manifeste et service worker mis à part).
 
 ---
 
@@ -51,6 +54,7 @@ python3 -m http.server 8000
 | **Fiche détail** (`#/adresse/:id`) | Badges, note et avis, description, champs spécifiques à la catégorie (menu, prix/nuit, garde…), contacts cliquables (tél., WhatsApp), itinéraire Google Maps, partage, favori, suppression des adresses créées localement, adresses similaires |
 | **Ajout** (`#/ajouter`) | Formulaire en 3 étapes, champs dynamiques selon la catégorie, sous-catégories à cocher, aperçu en direct de la carte, validation, publication immédiate |
 | **Favoris** (`#/favoris`) | Adresses enregistrées dans le navigateur, suppression unitaire ou globale |
+| **Connexion / inscription** (`#/connexion`, `#/inscription`) | Fenêtre modale avec illustration de marque, compte local, session mémorisée, compte de démonstration |
 
 Détails d’expérience :
 
@@ -68,16 +72,121 @@ Détails d’expérience :
 - **URL partageables** : chaque filtre de l’explorateur est reflété dans le hash,
   chaque fiche possède sa propre adresse.
 
+
+---
+
+## Identité visuelle & logo
+
+Le logo (épingle de localisation + « B » stylisé + mot-symbole bicolore) est
+décliné dans **`assets/logo/`**. Tous les fichiers SVG sont **vectorisés** à
+partir du logo fourni : ils restent nets à toutes les tailles et sur tous les
+écrans (aucune perte à l'agrandissement).
+
+| Fichier | Usage |
+| --- | --- |
+| `logo.svg` | Lockup horizontal — en-tête desktop, documents |
+| `logo-white.svg` | Version blanche — pied de page, fonds sombres |
+| `logo-stacked.svg` / `logo-stacked-white.svg` | Version empilée — splash, réseaux sociaux |
+| `mark.svg` / `mark-white.svg` / `mark-white-orange.svg` | Pictogramme seul |
+| `icon.svg` | Tuile d'application (base des PNG) |
+| `icon.png`, `icon-192.png`, `icon-512.png` | Icônes PWA |
+| `icon-maskable-512.png` | Icône maskable Android (zone de sécurité respectée) |
+| `apple-touch-icon.png` | Icône iOS (180 × 180, fond plein) |
+| `favicon-16.png`, `favicon-32.png`, `favicon-48.png` | Favicons |
+| `og-image.png` | Aperçu 1200 × 630 pour WhatsApp, Facebook, X, LinkedIn |
+| `auth-visual.jpg` | Illustration verticale de l'écran de connexion |
+
+### Palette
+
+| Rôle | Couleur |
+| --- | --- |
+| Bleu de marque | `#2563eb` |
+| Orange d'accent | `#f97316` |
+| Dégradé du splash | `#2563eb` → `#1e40af` |
+
+### Variables CSS du logo
+
+Le logo de l'en-tête et du splash est un **sprite SVG inline** (`<symbol>` +
+`<use>`) dont les couleurs sont pilotées par des variables CSS :
+
+```css
+:root {
+  --logo-blue: #2563eb;      /* bleu de marque */
+  --logo-orange: #f97316;    /* orange d'accent */
+  --logo-white: #ffffff;
+}
+
+[data-theme='dark'] {
+  --logo-blue: #60a5fa;      /* bleu éclairci pour rester lisible */
+  --logo-orange: #fb923c;
+}
+```
+
+Conséquences :
+
+- **net à toutes les résolutions** (aucune image raster dans l'interface) ;
+- **bascule automatique en mode sombre** en redéfinissant deux variables ;
+- les SVG de `assets/logo/` utilisent les mêmes variables avec un repli
+  (`var(--logo-blue, #2563eb)`), donc ils fonctionnent aussi hors application.
+
+### Où le logo apparaît
+
+1. **En-tête** — logo horizontal, hauteur 38 px (40 px dès 760 px), cliquable
+   vers l'accueil. Sur mobile, seul le pictogramme est affiché.
+2. **Splash** — logo empilé blanc centré sur dégradé bleu, animation
+   d'apparition (fondu + montée), puis disparition automatique après ~1,5 s.
+3. **Favicon & PWA** — `favicon.ico`, `favicon-16/32.png`, `apple-touch-icon.png`,
+   `icon-192.png`, `icon-512.png` et `manifest.json` complet.
+4. **Pied de page** — `logo-white.svg` sur une plaque sombre.
+5. **Mode sombre** — les variables `--logo-blue` / `--logo-orange` sont
+   éclaircies automatiquement.
+6. **Connexion & inscription** — logo horizontal centré au-dessus du formulaire,
+   illustration de marque à gauche sur desktop.
+7. **Aperçus sociaux** — `og:image` (1200 × 630), `twitter:card` en
+   `summary_large_image`.
+
+> Les balises `og:image` / `twitter:image` utilisent une URL absolue
+> (`https://bamahub.ml/assets/logo/og-image.png`) : WhatsApp et les autres
+> plateformes n'acceptent pas les chemins relatifs. Adaptez le domaine au
+> moment de la mise en ligne.
+
+---
+
+## Connexion & inscription
+
+Une fenêtre modale accessible (focus piégé, `Échap`, fond inerte) propose deux
+onglets :
+
+- **Connexion** : e-mail + mot de passe, compte de démonstration
+  `demo@bamahub.ml` / `bamako2026` (créé à la volée via « remplir
+  automatiquement ») ;
+- **Inscription** : nom complet, e-mail, mot de passe.
+
+Les comptes sont **locaux** : ils vivent dans `localStorage`
+(`bamahub:accounts`, `bamahub:session`), le mot de passe n'est jamais stocké en
+clair (empreinte SHA-256, avec repli si `crypto.subtle` est indisponible en
+`file://`). Les routes `#/connexion` et `#/inscription` ouvrent directement la
+fenêtre correspondante.
+
 ---
 
 ## Structure des fichiers
 
 ```
-index.html   Coquille HTML : en-tête, navigation, conteneur des pages, pied de page
-style.css    Design system complet (variables, composants, thème sombre, responsive)
-app.js       Application : état, rendu, routage par hash, filtres, favoris, formulaire
-data.js      CONFIG des catégories + 20 adresses de démonstration (données pures)
+index.html          Coquille HTML : en-tête, splash, sprite du logo, pied de page,
+                    fenêtre de connexion, conteneur des pages
+style.css           Design system complet (variables, composants, thème sombre,
+                    responsive, section « Identité de marque »)
+app.js              Application : état, rendu, routage, filtres, favoris, formulaire,
+                    session et écran de démarrage
+data.js             CONFIG des catégories + 20 adresses de démonstration
+manifest.json       Manifeste PWA (icônes, couleurs, raccourcis)
+favicon.ico         Favicon multi-tailles (16, 32, 48)
+assets/logo/        Logo vectorisé et déclinaisons (voir ci-dessous)
 ```
+
+Soit **quatre fichiers de code** (`index.html`, `style.css`, `app.js`, `data.js`)
+plus les ressources de marque (`manifest.json`, `favicon.ico`, `assets/logo/`).
 
 Répartition volontairement nette :
 
